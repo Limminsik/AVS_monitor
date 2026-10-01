@@ -79,6 +79,13 @@ async function listAll(q, fields = 'id,name,parents,modifiedTime,mimeType') {
 }
 
 const fileText = (id) => api(`files/${id}`, { alt: 'media' }, true);
+// 시간 파일의 첫 줄(헤더)만 — 앞 4KB만 받아 폰 번호·앱 버전·워치 번호를 읽는다
+async function fileHead(id) {
+  if (Date.now() > state.tokenExp) await requestToken('');
+  const res = await fetch(DRIVE + `files/${id}?alt=media`, { headers: { Authorization: 'Bearer ' + state.token, Range: 'bytes=0-4095' } });
+  if (!res.ok) return null;
+  try { return JSON.parse((await res.text()).split('\n')[0]); } catch (e) { return null; }
+}
 
 async function pool(items, n, fn) {
   const out = new Array(items.length);
@@ -220,21 +227,19 @@ function renderConn() {
   const holes = []; let h0 = null;
   cov.forEach((c, i) => { const t = slot0 + i * 600e3; if (c === 'off' && h0 === null) h0 = t; if (c !== 'off' && h0 !== null) { holes.push([h0, t]); h0 = null; } });
   if (h0 !== null) holes.push([h0, end]);
-  const missN = holes.reduce((a, [x, y]) => a + Math.round((y - x) / 600e3), 0);
-  const onN = cov.filter((c) => c === 'on').length, cntN = cov.filter((c) => c !== 'pre').length;
+    const onN = cov.filter((c) => c === 'on').length, cntN = cov.filter((c) => c !== 'pre').length;
   const holeTxt = holes.map(([x, y]) => `${kstHM(x)}–${kstHM(y)}`).join(', ');
   $('phonesNote').textContent = `${id} · 대상자 폴더 기준 · 마지막 갱신 ${kstHM(phoneAt)} (${ago(phoneAt, now)})`;
   $('phones').innerHTML = `<table class="list">
-    <thead><tr><th>상태</th><th>대상자</th><th>워치</th><th>스마트폰</th><th>드라이브</th><th class="r">전체 행</th><th style="min-width:200px">지난 24시간</th><th>빈 곳</th></tr></thead>
+    <thead><tr><th>상태</th><th>대상자</th><th>워치</th><th>스마트폰</th><th>드라이브</th><th class="r">전체 행</th><th style="min-width:240px">지난 24시간</th></tr></thead>
     <tbody><tr class="st-${run ? 'ok' : 'off'} sel">
       <td><span class="pill ${run ? 'ok' : 'off'}">${run ? '수집 중' : '완료'}</span></td>
       <td class="subj">${esc(id)}</td>
       <td data-tip="마지막 샘플 시각">${kstHM(lastSample)} <span class="muted">${ago(lastSample, now)}</span><div class="id">${esc(String(lastRow.watch || '').slice(0, 8) || '—')}</div></td>
-      <td data-tip="폰이 manifest를 마지막으로 고친 시각">${kstHM(phoneAt)} <span class="muted">${ago(phoneAt, now)}</span><div class="id">${ph ? esc(String(ph.phone_id || '').slice(0, 8)) + ' · ' + esc(ph.app_version || '') : '—'}</div></td>
+      <td data-tip="폰이 manifest를 마지막으로 고친 시각">${kstHM(phoneAt)} <span class="muted">${ago(phoneAt, now)}</span><div class="id">${(() => { const h = state.connHead || ph; return h && h.phone_id ? esc(String(h.phone_id).slice(0, 8)) + (h.app_version ? ' · ' + esc(h.app_version) : '') : '—'; })()}</div></td>
       <td data-tip="드라이브에 manifest가 마지막으로 올라온 시각">${kstHM(driveAt)} <span class="muted">${ago(driveAt, now)}</span>${unsynced ? `<div class="id" style="color:var(--red)">대기 ${unsynced}파일</div>` : ''}</td>
       <td class="r">${fmtInt(total)}</td>
-      <td><div class="strip" data-tip="지난 24시간 · 10분 칸 · 자료가 있는 칸 ${onN}/${cntN}">${cov.map((c) => `<i${c === 'on' ? ' class="on"' : ''}></i>`).join('')}</div></td>
-      <td>${missN ? `<span class="miss" data-tip="${esc(holeTxt)}">${missN * 10}분 · ${holes.length}곳</span>` : '<span class="nomiss">없음</span>'}</td>
+      <td><div class="strip" data-tip="지난 24시간 · 10분 칸 · 자료가 있는 칸 ${onN}/${cntN}${holes.length ? ' · 빈 곳 ' + holeTxt : ''}">${cov.map((c) => `<i${c === 'on' ? ' class="on"' : ''}></i>`).join('')}</div></td>
     </tr></tbody></table>`;
 }
 
@@ -295,7 +300,11 @@ async function selectSubject(id, keep) {
   state.events = state.days.flatMap((d) => d.events);
   state.fileIndex = new Map(state.days.flatMap((d) => (d.files || []).map((f) => [f.name, f])));
   state.connFor = id;
+  state.connHead = null;
   renderConn();
+  // 연결 상태의 스마트폰 칸 — 가장 최근 시간 파일 헤더에 적힌 폰 번호·앱 버전
+  const latest = state.manifest.filter((r) => r.file && state.fileIndex.has(r.file)).sort((a, b) => +b.last_ts - +a.last_ts)[0];
+  if (latest && !DEMO) fileHead(state.fileIndex.get(latest.file).id).then((h) => { if (h && state.sel === id) { state.connHead = h; renderConn(); } }).catch(() => {});
   renderFill();
   renderEvents();
   initSignal(keep && !changed);
@@ -356,7 +365,7 @@ function renderFill() {
   html += '</table></div>';
   $('fillLegend').innerHTML = `<span><i class="sw" style="background:var(--seq4)"></i>99+</span><span><i class="sw" style="background:var(--seq3)"></i>97–99</span>
     <span><i class="sw" style="background:var(--seq2)"></i>90–97</span><span><i class="sw" style="background:var(--seq1)"></i>50–90</span>
-    <span><i class="sw" style="background:var(--seq0)"></i>50 아래</span><span><i class="sw" style="background:transparent;box-shadow:inset 0 0 0 2px #E0A33A"></i>쓰는 중</span>`;
+    <span><i class="sw" style="background:var(--seq0)"></i>&lt;50</span><span><i class="sw" style="background:transparent;box-shadow:inset 0 0 0 2px #E0A33A"></i>쓰는 중</span>`;
   $('fill').innerHTML = html;
   document.querySelectorAll('#fill td[data-t]').forEach((td) => td.addEventListener('click', () => {
     if (sig.tag !== td.dataset.tag) { $('pickFile').value = td.dataset.tag; setTracker(td.dataset.tag, +td.dataset.t); }
