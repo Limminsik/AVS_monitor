@@ -456,7 +456,41 @@ const CACHE_MAX = 8;
 const OV_SPANS = [[864e5, '24시간'], [6 * 3600e3, '6시간'], [3600e3, '1시간'], [600e3, '10분']];
 const LENS = [10, 30, 60, 300, 1800];
 const sig = { tag: null, files: [], T0: 0, T1: 0, cache: new Map(), loading: new Map(), failed: new Set(), view: { t: 0, len: 30 },
-  cols: null, chans: [], header: null, rate: 0, alarms: [], issues: [], hoverT: null, seg: [], raf: 0, ovSpan: 864e5 };
+  cols: null, chans: [], header: null, rate: 0, alarms: [], issues: [], hoverT: null, seg: [], raf: 0, ovSpan: 864e5,
+  sum: new Map(), scanId: 0, scanning: false };
+// 빈틈 기준 — 명세 주기의 2.5배(최소 1초). 25 Hz는 1초, 심박(1 Hz)은 2.5초
+const gapMs = () => (sig.rate ? Math.max(1000, 2500 / sig.rate) : Infinity);
+// 파일 하나의 실제 빈틈·센서 −1 구간(읽은 뒤 요약만 남겨 둔다 — 파일은 메모리에서 지워져도)
+function summarize(o) {
+  const g = gapMs(), gaps = [], bad = [];
+  for (let k = 1; k < o.n; k++) if (o.ts[k] - o.ts[k - 1] > g) gaps.push([o.ts[k - 1], o.ts[k]]);
+  const any = Object.values(o.bad);
+  let s0 = null;
+  for (let k = 0; k <= o.n; k++) { const b = k < o.n && any.some((a) => a[k]); if (b && s0 === null) s0 = o.ts[k]; if (!b && s0 !== null) { bad.push([s0, o.ts[k - 1]]); s0 = null; } }
+  return { gaps, bad };
+}
+// 파일 사이·첫 샘플 전의 빈 시간 — manifest만으로
+function fileGaps() {
+  const g = gapMs(), out = []; let prev = sig.comp.start;
+  sig.files.forEach((f) => { if (f.t0 - prev > g) out.push([prev, f.t0]); prev = Math.max(prev, f.t1); });
+  return out;
+}
+// 위 막대에 보이는 구간의 파일을 하나씩 읽어 요약을 채운다(뒤에서 천천히)
+async function scanRange() {
+  if (sig.scanning) return;
+  const id = sig.scanId; sig.scanning = true;
+  try {
+    for (;;) {
+      if (id !== sig.scanId) return;
+      const [a, b] = ovRange();
+      const f = sig.files.find((q) => q.t1 >= a && q.t0 <= b && !sig.sum.has(q.name) && !sig.failed.has(q.name));
+      if (!f) return;
+      await loadFile(f);
+      if (id !== sig.scanId) return;
+      drawOverview();
+    }
+  } finally { sig.scanning = false; }
+}
 
 
 // 원자료 한 파일을 읽어 그리기용 배열로 — 화면이 멈추지 않게 가능하면 웹 워커에서.
@@ -554,7 +588,7 @@ function softRefresh() {
   sig.comp = completeness(sig.tag);
   sig.files = sig.comp.files.map((f) => ({ name: f.r.file, t0: f.t0, t1: f.t1, rows: f.n, fill: f.pct, status: f.r.status }));
   sig.T0 = sig.files[0].t0; sig.T1 = Math.max(...sig.files.map((f) => f.t1));
-  sig.files.forEach((f) => { if (old.get(f.name) !== f.rows) { sig.cache.delete(f.name); sig.failed.delete(f.name); } });
+  sig.files.forEach((f) => { if (old.get(f.name) !== f.rows) { sig.cache.delete(f.name); sig.failed.delete(f.name); sig.sum.delete(f.name); } });
   sig.alarms = alarmSpans();
   renderSigKpi();
   seek(sig.view.t);
@@ -567,7 +601,8 @@ function setTracker(tag, t) {
   sig.files = sig.comp.files.map((f) => ({ name: f.r.file, t0: f.t0, t1: f.t1, rows: f.n, fill: f.pct, status: f.r.status }));
   sig.T0 = sig.files[0].t0; sig.T1 = Math.max(...sig.files.map((f) => f.t1));
   sig.rate = RATE[tag] || 0;
-  if (!sameTag) { sig.cols = null; sig.chans = []; sig.header = null; sig.view.len = sig.rate >= 10 ? 30 : sig.rate >= 1 ? 1800 : 1800; }
+  sig.scanId++;
+  if (!sameTag) { sig.sum.clear(); sig.cols = null; sig.chans = []; sig.header = null; sig.view.len = sig.rate >= 10 ? 30 : sig.rate >= 1 ? 1800 : 1800; }
   sig.failed.clear();
   sig.alarms = alarmSpans();
   sig.issues = (state.events || []).filter((e) => ['bad', 'warn'].includes(evClass(e.code)) && e.code !== 'watch_lost').map((e) => ({ ...e, ms: Date.parse(String(e.kst).replace(' ', 'T') + '+09:00') })).filter((e) => !isNaN(e.ms));
@@ -609,7 +644,7 @@ const filesIn = (a, b) => sig.files.filter((f) => f.t1 >= a && f.t0 <= b);
 function adoptCols(o) { if (!sig.cols && o) { sig.cols = o.cols; sig.chans = o.chans; sig.header = o.header; renderChannels(); } }
 
 async function loadFile(f) {
-  if (sig.cache.has(f.name)) { const v = sig.cache.get(f.name); sig.cache.delete(f.name); sig.cache.set(f.name, v); adoptCols(v); return v; }
+  if (sig.cache.has(f.name)) { const v = sig.cache.get(f.name); sig.cache.delete(f.name); sig.cache.set(f.name, v); if (!sig.sum.has(f.name)) sig.sum.set(f.name, summarize(v)); adoptCols(v); return v; }
   if (sig.failed.has(f.name)) return null;
   if (sig.loading.has(f.name)) return sig.loading.get(f.name);
   const p = (async () => {
@@ -619,6 +654,7 @@ async function loadFile(f) {
       else { const d = state.fileIndex && state.fileIndex.get(f.name); if (!d) throw new Error('드라이브에서 찾지 못함'); text = await fileText(d.id); }
       const o = await parser(text); o.text = text;
       sig.cache.set(f.name, o);
+      sig.sum.set(f.name, summarize(o));
       while (sig.cache.size > CACHE_MAX) {
         const [a, b] = [sig.view.t, sig.view.t + sig.view.len * 1000];
         const old = [...sig.cache.keys()].find((k) => !filesIn(a, b).some((x) => x.name === k));
@@ -641,7 +677,7 @@ async function ensureLoaded() {
   // 앞뒤 파일을 미리 읽어 이어 볼 때 끊기지 않게
   const i0 = sig.files.findIndex((f) => f.t1 >= a), i1 = sig.files.findIndex((f) => f.t0 > b);
   clearTimeout(sig.preT);
-  sig.preT = setTimeout(() => [sig.files[i0 - 1], i1 >= 0 ? sig.files[i1] : null].filter(Boolean).forEach((f) => loadFile(f)), 600);   // 앞뒤 파일은 멈춘 뒤에
+  sig.preT = setTimeout(() => { [sig.files[i0 - 1], i1 >= 0 ? sig.files[i1] : null].filter(Boolean).forEach((f) => loadFile(f)); scanRange(); }, 600);   // 앞뒤 파일·위 막대 빈틈은 멈춘 뒤에
 }
 
 const setStatus = (t) => { const s = $('sigStatus'); if (s) s.textContent = t; };
@@ -672,7 +708,7 @@ function renderSignalShell() {
       <div class="win-stat" id="sigStat"></div>
       <div id="sigChans"><div class="empty mon-empty">파일을 읽는 중…</div></div>
       <div class="readout" id="sigRead">그래프를 끌면 시간이 이어서 움직입니다 · 올리면 그 샘플 값과 아래 원본 줄이 표시됩니다 <span id="sigStatus"></span></div>
-      <div class="legend"><span><i class="sw" style="background:${chanColor('green')}"></i>측정 값</span><span><i class="sw" style="background:var(--mon-bad)"></i>센서 상태 −1</span><span><i class="sw" style="background:rgba(255,71,71,.35)"></i>1초 넘는 빈틈</span><span><i class="sw" style="background:var(--mon-alarm)"></i>워치 끊김(폰 로그)</span><span><i class="sw" style="background:transparent;border-color:var(--mon-win)"></i>지금 보는 창</span></div>
+      <div class="legend"><span><i class="sw" style="background:${chanColor('green')}"></i>측정 값</span><span><i class="sw" style="background:var(--mon-bad)"></i>센서 상태 −1</span><span><i class="sw" style="background:#FF4747"></i>빈틈(25 Hz 1초 · 1 Hz 2.5초 넘게)</span><span><i class="sw" style="background:#E6EDF3;border-radius:50%"></i>다른 이슈(폰 로그)</span><span><i class="sw" style="background:var(--mon-alarm)"></i>워치 끊김(폰 로그)</span><span><i class="sw" style="background:transparent;border-color:var(--mon-win)"></i>지금 보는 창</span></div>
     </div>
     <h3 class="sub-h raw-h">원본 값</h3>
     <div class="tw rawtw" id="rawBox"><table class="raw"><thead id="rawHead"></thead><tbody id="sigRows"></tbody></table></div>`;
@@ -742,10 +778,10 @@ function drawAll() {
   // 창 통계
   let gaps = 0, gapS = 0, badN = 0; const lag = []; let prev = null;
   sig.seg.forEach(({ o, i, j }) => { const any = Object.values(o.bad);
-    for (let k = i; k < j; k++) { const t = o.ts[k]; if (prev !== null && t - prev > 1000) { gaps++; gapS += (t - prev) / 1000; } prev = t; if (any.some((bb) => bb[k])) badN++; if ((k - i) % 25 === 0) lag.push((o.sent[k] - t) / 1000); } });
+    const G = gapMs(); for (let k = i; k < j; k++) { const t = o.ts[k]; if (prev !== null && t - prev > G) { gaps++; gapS += (t - prev) / 1000; } prev = t; if (any.some((bb) => bb[k])) badN++; if ((k - i) % 25 === 0) lag.push((o.sent[k] - t) / 1000); } });
   lag.sort((p, q) => p - q);
   const exp = sig.rate ? v.len * sig.rate : 0;
-  $('sigStat').innerHTML = `<span>이 창 <b>${fmtInt(n)}</b>샘플${exp ? ` / 기대 ${fmtInt(exp)}` : ''}</span><span>1초 넘는 빈틈 <b>${gaps}</b>${gaps ? ` (합 ${gapS.toFixed(1)}초)` : ''}</span><span>센서 −1 <b>${fmtInt(badN)}</b></span><span>도착 지연 중앙 <b>${lag.length ? lag[lag.length >> 1].toFixed(1) + '초' : '—'}</b></span>`;
+  $('sigStat').innerHTML = `<span>이 창 <b>${fmtInt(n)}</b>샘플${exp ? ` / 기대 ${fmtInt(exp)}` : ''}</span><span>빈틈 <b>${gaps}</b>${gaps ? ` (합 ${gapS.toFixed(1)}초)` : ''}</span><span>센서 −1 <b>${fmtInt(badN)}</b></span><span>도착 지연 중앙 <b>${lag.length ? lag[lag.length >> 1].toFixed(1) + '초' : '—'}</b></span>`;
   drawOverview();
   drawChannels();
   clearTimeout(sig.rawT); sig.rawT = setTimeout(renderRaw, 180);   // 원본 표는 움직임이 멈춘 뒤에 한 번
@@ -767,15 +803,26 @@ function ovTip(t, y) {
   const parts = [`${kstDate(t).slice(5)} ${kstFull(t).slice(0, 8)}`];
   if (f) parts.push(`${f.name.replace(/\.ndjson$/, '')} · 완전성 ${f.fill === null ? '—' : f.fill.toFixed(1) + '%'}`);
   if (al) parts.push(`워치 끊김(폰 로그) ${kstFull(al[0]).slice(0, 8)}–${kstFull(al[1]).slice(0, 8)} · ${Math.round((al[1] - al[0]) / 1000)}초 — 누르면 그 시작으로`);
+  const tol = (ovRange()[1] - ovRange()[0]) / 300, L = gapLanes(t - tol, t + tol);
+  L.gaps.forEach(([a, b]) => parts.push(`빈틈 ${kstFull(a).slice(0, 8)}–${kstFull(b).slice(0, 8)} · ${((b - a) / 1000).toFixed(1)}초`));
+  L.bad.forEach(([a, b]) => parts.push(`센서 −1 ${kstFull(a).slice(0, 8)}–${kstFull(b).slice(0, 8)} · ${Math.round((b - a) / 1000)}초`));
+  if (L.unread.length) parts.push('빈틈 확인 전(파일을 읽는 중)');
   iss.forEach((e) => parts.push(`${String(e.kst).slice(11, 19)} ${e.text} (${e.code})`));
   return parts.join(' · ');
+}
+
+function gapLanes(T0, T1) {
+  const gaps = fileGaps(), bad = [], unread = []; let done = 0, todo = 0;
+  sig.files.forEach((f) => { if (f.t1 < T0 || f.t0 > T1) return; const sm = sig.sum.get(f.name);
+    if (sm) { done++; gaps.push(...sm.gaps); bad.push(...sm.bad); } else if (!sig.failed.has(f.name)) { todo++; unread.push([f.t0, f.t1]); } });
+  return { gaps: gaps.filter(([a, b]) => b > T0 && a < T1), bad: bad.filter(([a, b]) => b > T0 && a < T1), unread, done, todo };
 }
 
 function drawOverview() {
   const ov = $('sigOv'), O = canvasSetup(ov), x = O.x, w = O.w, h = O.h;
   if (w < 20) return;
   const [T0, T1] = ovRange(), X = (t) => ((t - T0) / (T1 - T0)) * w, SP = T1 - T0;
-  const BAR_T = 16, BAR_H = h - 16 - 62, AL_Y = h - 44, IS_Y = h - 12;
+  const BAR_T = 16, BAR_H = h - 16 - 64, AL_Y = h - 46, IS_Y = h - 12;
   document.querySelectorAll('#signal [data-ov]').forEach((b) => b.classList.toggle('on', +b.dataset.ov === sig.ovSpan));
   x.fillStyle = cssv('--mon-bg'); x.fillRect(0, 0, w, h);
   x.fillStyle = cssv('--mon-grid2'); x.fillRect(0, BAR_T, w, BAR_H);
@@ -806,10 +853,15 @@ function drawOverview() {
     x.fillStyle = cssv('--mon-alarm'); x.fillRect(a, AL_Y, Math.max(2, b - a), 14);
     const lb = (eA - sA) >= 60e3 ? `${Math.round((eA - sA) / 60e3)}분` : `${Math.round((eA - sA) / 1000)}초`;
     if (b - a > x.measureText(lb).width + 8) { x.fillStyle = '#fff'; x.fillText(lb, a + 4, AL_Y + 11); } });
-  // 다른 이슈(폰 로그) — 점
-  x.fillStyle = cssv('--mon-dim'); x.fillText('다른 이슈(폰 로그)', 2, IS_Y - 4);
-  x.fillStyle = cssv('--mon-grid2'); x.fillRect(0, IS_Y, w, 8);
-  sig.issues.forEach((e) => { if (e.ms < T0 || e.ms > T1) return; x.fillStyle = evClass(e.code) === 'bad' ? '#FF4747' : '#FFB300'; x.fillRect(X(e.ms) - 1.5, IS_Y, 3, 8); });
+  // 실제 빈틈(자료) — 빨강 = 샘플 빈틈 · 노랑 = 센서 −1. 안 읽은 파일은 빗금. 다른 이슈(폰 로그)는 점
+  const lanes = gapLanes(T0, T1), lbl = `실제 빈틈(자료)${lanes.todo ? ` · 확인 중 ${lanes.done}/${lanes.done + lanes.todo}` : ''}`;
+  x.fillStyle = cssv('--mon-dim'); x.fillText(lbl, 2, IS_Y - 4);
+  x.fillStyle = cssv('--mon-grid2'); x.fillRect(0, IS_Y, w, 10);
+  lanes.unread.forEach(([a, b]) => { x.fillStyle = 'rgba(255,255,255,.06)'; x.fillRect(X(a), IS_Y, Math.max(1, X(b) - X(a)), 10); });
+  lanes.bad.forEach(([a, b]) => { x.fillStyle = '#FFB300'; x.fillRect(X(a), IS_Y, Math.max(2, X(b) - X(a)), 10); });
+  lanes.gaps.forEach(([a, b]) => { x.fillStyle = '#FF4747'; x.fillRect(X(a), IS_Y, Math.max(2, X(b) - X(a)), 10); });
+  sig.issues.forEach((e) => { if (e.ms < T0 || e.ms > T1) return; x.fillStyle = '#E6EDF3'; x.strokeStyle = '#000'; x.lineWidth = 1;
+    x.beginPath(); x.arc(X(e.ms), IS_Y + 5, 3, 0, 7); x.fill(); x.stroke(); });
   // 지금 보는 창
   const ws = X(sig.view.t), we = X(sig.view.t + sig.view.len * 1000);
   x.fillStyle = 'rgba(90,200,250,.18)'; x.fillRect(ws, BAR_T, Math.max(3, we - ws), h - BAR_T);
@@ -853,7 +905,7 @@ function drawChannels() {
     sig.seg.forEach(({ o, i, j }) => {
       const bad = o.bad[col]; x.fillStyle = cssv('--mon-bad');
       for (let k = i; k < j; k++) if (bad && bad[k]) { let e = k; while (e < j && bad[e]) e++; x.fillRect(XX(o.ts[k]), T, Math.max(2, XX(o.ts[e - 1]) - XX(o.ts[k])), PH); k = e; }
-      for (let k = i; k < j; k++) { const t = o.ts[k]; if (prevT !== null && t - prevT > 1000) { const x0 = XX(prevT), x1 = XX(t);
+      const G = gapMs(); for (let k = i; k < j; k++) { const t = o.ts[k]; if (prevT !== null && t - prevT > G) { const x0 = XX(prevT), x1 = XX(t);
         x.fillStyle = 'rgba(255,71,71,.18)'; x.fillRect(x0, T, Math.max(2, x1 - x0), PH);
         if (x1 - x0 > 60) { x.fillStyle = '#FF8A8A'; x.fillText(`빈틈 ${((t - prevT) / 1000).toFixed(1)}초`, x0 + 6, T + PH - 8); } } prevT = t; }
     });
