@@ -412,52 +412,71 @@ function alarmSpans() {
   return out;
 }
 
-const CACHE_MAX = 8, RAW_MAX = 1500;
+const CACHE_MAX = 8;
 const OV_SPANS = [[864e5, '24시간'], [6 * 3600e3, '6시간'], [3600e3, '1시간'], [600e3, '10분']];
 const LENS = [10, 30, 60, 300, 1800];
 const sig = { tag: null, files: [], T0: 0, T1: 0, cache: new Map(), loading: new Map(), failed: new Set(), view: { t: 0, len: 30 },
   cols: null, chans: [], header: null, rate: 0, alarms: [], issues: [], hoverT: null, seg: [], raf: 0, ovSpan: 864e5 };
 
-function parseRaw(text) {
-  const out = { header: null, cols: null, rows: [], sessions: 0, oldShape: false };
-  for (const line of text.split('\n')) {
-    if (!line) continue;
-    if (line[0] === '{') {
-      const r = JSON.parse(line);
-      if (r.record === 'header') out.header = r;
-      else if (r.record === 'session') out.sessions++;
-      else if (r.record === 'batch') {           // 1.7까지의 옛 모양 — 묶음 한 줄
-        out.oldShape = true;
-        const cols = ['ts', 'sent_at', ...r.columns.slice(1)];
-        if (!out.cols) out.cols = cols;
-        for (const row of r.rows) out.rows.push([row[0], r.sent_at, ...row.slice(1)]);
-        if (!out.header) out.header = { tracker: r.tracker_type, device_id: r.device_id, watch: String(r.device_id || '').slice(0, 8), format: '옛 모양(묶음)', session_id: r.session_id };
-      }
-    } else if (line.startsWith('["')) out.cols = JSON.parse(line);
-    else out.rows.push(JSON.parse(line));
+
+// 원자료 한 파일을 읽어 그리기용 배열로 — 화면이 멈추지 않게 가능하면 웹 워커에서.
+// 원본 값 표는 파일 글자를 그대로 두고, 보이는 줄만 그때그때 꺼낸다(줄 위치만 기억).
+function parseText(text) {
+  const statusOf = (col, cols) => { const cand = [col.replace(/^ppg_/, '') + '_status', col + '_status', 'status']; return cand.find((c) => cols.includes(c) && c !== col) || null; };
+  let header = null, cols = null, sessions = 0, oldShape = false;
+  const rows = [], starts = [], ends = [], rawRows = [];
+  let pos = 0;
+  while (pos < text.length) {
+    let nl = text.indexOf('\n', pos); if (nl < 0) nl = text.length;
+    let end = nl; if (end > pos && text.charCodeAt(end - 1) === 13) end--;
+    if (end > pos) {
+      const c0 = text.charCodeAt(pos);
+      if (c0 === 123) {                                   // {
+        const r = JSON.parse(text.slice(pos, end));
+        if (r.record === 'header') header = r;
+        else if (r.record === 'session') sessions++;
+        else if (r.record === 'batch') {                  // 1.7까지의 옛 모양
+          oldShape = true;
+          if (!cols) cols = ['ts', 'sent_at', ...r.columns.slice(1)];
+          for (const row of r.rows) { const v = [row[0], r.sent_at, ...row.slice(1)]; rows.push(v); rawRows.push(v); starts.push(0); ends.push(0); }
+          if (!header) header = { tracker: r.tracker_type, device_id: r.device_id, watch: String(r.device_id || '').slice(0, 8), format: '옛 모양(묶음)', session_id: r.session_id };
+        }
+      } else if (c0 === 91 && text.charCodeAt(pos + 1) === 34) cols = JSON.parse(text.slice(pos, end));   // ["
+      else if (c0 === 91) { rows.push(JSON.parse(text.slice(pos, end))); starts.push(pos); ends.push(end); }
+    }
+    pos = nl + 1;
   }
-  return out;
-}
-
-const statusOf = (col, cols) => {
-  const cand = [col.replace(/^ppg_/, '') + '_status', col + '_status', 'status'];
-  return cand.find((c) => cols.includes(c) && c !== col) || null;
-};
-
-function buildFile(p) {
-  if (!p.cols || !p.rows.length) throw new Error('값 줄이 없음');
-  p.rows.sort((a, b) => a[0] - b[0]);
-  const cols = p.cols, rows = p.rows;
-  const numeric = cols.filter((c, j) => j >= 2 && !/status/.test(c) && typeof rows.find((r) => r[j] !== null)?.[j] === 'number');
-  const f = { header: p.header || {}, cols, raw: rows, n: rows.length, sessions: p.sessions, chans: numeric,
-    ts: Float64Array.from(rows, (r) => r[0]), sent: Float64Array.from(rows, (r) => r[1]), data: {}, bad: {} };
-  numeric.forEach((c) => {
-    const j = cols.indexOf(c), sc = statusOf(c, cols), k = sc ? cols.indexOf(sc) : -1;
-    f.data[c] = Float64Array.from(rows, (r) => (r[j] === null ? NaN : r[j]));
-    f.bad[c] = Uint8Array.from(rows, (r) => (k >= 0 && r[k] !== 0 && r[k] !== null ? 1 : 0));
+  if (!cols || !rows.length) throw new Error('값 줄이 없음');
+  let order = null;
+  for (let i = 1; i < rows.length; i++) if (rows[i][0] < rows[i - 1][0]) { order = rows.map((_, k) => k).sort((x, y) => rows[x][0] - rows[y][0]); break; }
+  const at = (i) => (order ? order[i] : i), n = rows.length;
+  const chans = cols.filter((c, j) => j >= 2 && !/status/.test(c) && typeof rows.find((r) => r[j] !== null)?.[j] === 'number');
+  const ts = new Float64Array(n), sent = new Float64Array(n), st = new Uint32Array(n), en = new Uint32Array(n), data = {}, bad = {};
+  for (let i = 0; i < n; i++) { const r = rows[at(i)]; ts[i] = r[0]; sent[i] = r[1]; st[i] = starts[at(i)]; en[i] = ends[at(i)]; }
+  chans.forEach((c) => {
+    const j = cols.indexOf(c), sc = statusOf(c, cols), k = sc ? cols.indexOf(sc) : -1, d = new Float64Array(n), b = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { const r = rows[at(i)]; d[i] = r[j] === null ? NaN : r[j]; b[i] = k >= 0 && r[k] !== 0 && r[k] !== null ? 1 : 0; }
+    data[c] = d; bad[c] = b;
   });
-  return f;
+  return { header: header || {}, cols, chans, n, ts, sent, data, bad, starts: st, ends: en, sessions, oldShape, rawRows: oldShape ? (order ? order.map((k) => rawRows[k]) : rawRows) : null };
 }
+
+const parser = (() => {
+  let w = null, seq = 0; const wait = new Map();
+  try {
+    const src = 'const parseText = ' + parseText.toString() + ';\nself.onmessage = (e) => { try { const r = parseText(e.data.text); const tr = [r.ts.buffer, r.sent.buffer, r.starts.buffer, r.ends.buffer, ...Object.values(r.data).map((a) => a.buffer), ...Object.values(r.bad).map((a) => a.buffer)]; self.postMessage({ id: e.data.id, r }, tr); } catch (err) { self.postMessage({ id: e.data.id, error: String(err && err.message || err) }); } };';
+    w = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+    w.onmessage = (e) => { const f = wait.get(e.data.id); if (!f) return; wait.delete(e.data.id); e.data.error ? f[1](new Error(e.data.error)) : f[0](e.data.r); };
+    w.onerror = () => { w = null; wait.forEach(([, rej]) => rej(new Error('worker'))); wait.clear(); };
+  } catch (e) { w = null; }
+  return async (text) => {
+    if (w) { try { return await new Promise((res, rej) => { const id = ++seq; wait.set(id, [res, rej]); w.postMessage({ id, text }); }); } catch (e) { if (e.message !== 'worker') throw e; } }
+    return parseText(text);                               // 워커가 안 되는 곳에서는 바로
+  };
+})();
+
+// 파일의 k번째 샘플 한 줄(원본 그대로)
+const rowAt = (o, k) => (o.rawRows ? o.rawRows[k] : JSON.parse(o.text.slice(o.starts[k], o.ends[k])));
 
 const lowerIn = (arr, n, t) => { let lo = 0, hi = n; while (lo < hi) { const m = (lo + hi) >> 1; if (arr[m] < t) lo = m + 1; else hi = m; } return lo; };
 const kstFull = (ms) => { const d = new Date(ms + 9 * 3600e3); return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.${String(d.getUTCMilliseconds()).padStart(3, '0')}`; };
@@ -558,7 +577,7 @@ async function loadFile(f) {
       let text;
       if (DEMO) text = demo.raw(f.name);
       else { const d = state.fileIndex && state.fileIndex.get(f.name); if (!d) throw new Error('드라이브에서 찾지 못함'); text = await fileText(d.id); }
-      const o = buildFile(parseRaw(text));
+      const o = await parser(text); o.text = text;
       sig.cache.set(f.name, o);
       while (sig.cache.size > CACHE_MAX) {
         const [a, b] = [sig.view.t, sig.view.t + sig.view.len * 1000];
@@ -615,7 +634,7 @@ function renderSignalShell() {
       <div class="readout" id="sigRead">그래프를 끌면 시간이 이어서 움직입니다 · 올리면 그 샘플 값과 아래 원본 줄이 표시됩니다 <span id="sigStatus"></span></div>
       <div class="legend"><span><i class="sw" style="background:${chanColor('green')}"></i>측정 값</span><span><i class="sw" style="background:var(--mon-bad)"></i>센서 상태 −1</span><span><i class="sw" style="background:rgba(255,71,71,.35)"></i>1초 넘는 빈틈</span><span><i class="sw" style="background:var(--mon-alarm)"></i>워치 끊김(폰 로그)</span><span><i class="sw" style="background:transparent;border-color:var(--mon-win)"></i>지금 보는 창</span></div>
     </div>
-    <h3 class="sub-h raw-h">원본 값 <span class="muted" id="rawNote"></span></h3>
+    <h3 class="sub-h raw-h">원본 값</h3>
     <div class="tw rawtw" id="rawBox"><table class="raw"><thead id="rawHead"></thead><tbody id="sigRows"></tbody></table></div>`;
   renderSigKpi();
   if (sig.cols) renderChannels();
@@ -836,25 +855,44 @@ function drawCursorOn(c) {
 
 function drawCursor(fromChart) {
   document.querySelectorAll('#signal canvas.sigc').forEach((c) => { const x = c.getContext('2d'); if (c._snap) { x.setTransform(1, 0, 0, 1, 0, 0); x.drawImage(c._snap, 0, 0); } x.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0); drawCursorOn(c); });
-  document.querySelectorAll('#sigRows tr.hl').forEach((r) => r.classList.remove('hl'));
-  if (sig.hoverT === null) return;
+  if (sig.hoverT === null) { if (sig.rawHl !== undefined) { sig.rawHl = -1; renderRawRows(); } return; }
   const nb = nearest(sig.hoverT); if (!nb) return;
   const o = nb.o, k = nb.k, inAlarm = sig.alarms.some(([sA, eA]) => o.ts[k] >= sA && o.ts[k] < eA);
   $('sigRead').innerHTML = `<b>${kstDate(o.ts[k])} ${kstFull(o.ts[k])}</b> · ` + sig.chans.map((c) => `<span style="color:${chanColor(c)}">${esc(c)}</span> ${esc(o.data[c] ? o.data[c][k] : '')}`).join(' · ') + ` · 보냄 ${((o.sent[k] - o.ts[k]) / 1000).toFixed(1)}초 뒤` + (Object.values(o.bad).some((b) => b[k]) ? ' · <span style="color:#FFB300">상태 −1</span>' : '') + (inAlarm ? ' · <span style="color:#FF2D55">워치 끊김 로그 구간</span>' : '') + ' <span id="sigStatus"></span>';
-  const row = document.querySelector(`#sigRows tr[data-t="${o.ts[k]}"]`);
-  if (row) { row.classList.add('hl'); if (fromChart) { const box = $('rawBox'); const top = row.offsetTop - box.clientHeight / 2; box.scrollTop = Math.max(0, top); } }
+  const R = sig.raw;
+  if (R && R.n) {
+    let i = lowerIn(R.t, R.n, o.ts[k]); if (i >= R.n) i = R.n - 1;
+    sig.rawHl = i;
+    if (fromChart) { const box = $('rawBox'); box.scrollTop = Math.max(0, i * ROW_H - box.clientHeight / 2 + ROW_H); }
+    renderRawRows();
+  }
 }
 
+// 원본 값 표 — 보는 창의 줄을 모두. 화면에 보이는 줄만 그때그때 만든다(수만 줄도 가볍게)
+const ROW_H = 22;
 function renderRaw() {
   if (!$('sigRows') || !sig.cols) return;
-  const out = []; let n = 0, total = 0;
-  sig.seg.forEach(({ o, i, j }) => { total += j - i; for (let k = i; k < j && n < RAW_MAX; k++, n++) {
-    const r = o.raw[k];
-    out.push(`<tr data-t="${o.ts[k]}"><td>${kstMD(o.ts[k])} ${kstFull(o.ts[k])}</td>${r.map((q, jj) => `<td class="${/status/.test(sig.cols[jj]) && q !== 0 && q !== null ? 'bad' : ''}">${esc(Array.isArray(q) ? JSON.stringify(q) : q)}</td>`).join('')}</tr>`);
-  } });
-  $('sigRows').innerHTML = out.join('') || `<tr><td colspan="${sig.cols.length + 1}">이 창에 샘플이 없습니다</td></tr>`;
-  $('rawNote').textContent = total > RAW_MAX ? `이 창 ${fmtInt(total)}줄 중 앞 ${fmtInt(RAW_MAX)}줄 — 창을 줄이면 모두 보입니다` : `이 창 ${fmtInt(total)}줄 — 파일에 적힌 그대로`;
-  $('sigRows').onmouseover = (e) => { const tr = e.target.closest('tr[data-t]'); if (!tr) return; sig.hoverT = +tr.dataset.t; drawCursor(false); };
+  let n = 0; sig.seg.forEach(({ i, j }) => (n += j - i));
+  const ro = new Array(n), rk = new Int32Array(n), rt = new Float64Array(n); let m = 0;
+  sig.seg.forEach(({ o, i, j }) => { for (let k = i; k < j; k++, m++) { ro[m] = o; rk[m] = k; rt[m] = o.ts[k]; } });
+  sig.raw = { o: ro, k: rk, t: rt, n };
+  const box = $('rawBox'); if (sig.hoverT === null) box.scrollTop = 0;
+  box.onscroll = () => { cancelAnimationFrame(sig.rawRaf); sig.rawRaf = requestAnimationFrame(renderRawRows); };
+  $('sigRows').onmouseover = (e) => { const tr = e.target.closest('tr[data-i]'); if (!tr) return; sig.hoverT = sig.raw.t[+tr.dataset.i]; drawCursor(false); };
+  renderRawRows();
+}
+function renderRawRows() {
+  const R = sig.raw, box = $('rawBox'); if (!R || !box) return;
+  if (!R.n) { $('sigRows').innerHTML = `<tr><td colspan="${sig.cols.length + 1}">이 창에 샘플이 없습니다</td></tr>`; return; }
+  const head = ($('rawHead') && $('rawHead').offsetHeight) || ROW_H;
+  const a = Math.max(0, Math.floor((box.scrollTop - head) / ROW_H) - 10), b = Math.min(R.n, a + Math.ceil(box.clientHeight / ROW_H) + 20);
+  const out = [`<tr class="sp" style="height:${a * ROW_H}px"></tr>`];
+  for (let i = a; i < b; i++) {
+    const o = R.o[i], k = R.k[i], r = rowAt(o, k);
+    out.push(`<tr data-i="${i}"${i === sig.rawHl ? ' class="hl"' : ''}><td>${kstMD(o.ts[k])} ${kstFull(o.ts[k])}</td>${r.map((q, jj) => `<td class="${/status/.test(sig.cols[jj]) && q !== 0 && q !== null ? 'bad' : ''}">${esc(Array.isArray(q) ? JSON.stringify(q) : q)}</td>`).join('')}</tr>`);
+  }
+  out.push(`<tr class="sp" style="height:${(R.n - b) * ROW_H}px"></tr>`);
+  $('sigRows').innerHTML = out.join('');
 }
 
 addEventListener('resize', () => { if (sig.files.length) drawAll(); });

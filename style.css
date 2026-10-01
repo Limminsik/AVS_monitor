@@ -321,3 +321,6 @@ table.flist .no { color:var(--red); }
 #progress td.num { color:var(--ink3); font-variant-numeric:tabular-nums; }
 #progress .bar { margin-top:6px; }
 #progress td { vertical-align:middle; }
+/* 원본 값 — 줄 높이 고정(보이는 줄만 그림) */
+table.raw tbody td { height:22px; padding-top:0; padding-bottom:0; line-height:21px; }
+table.raw tr.sp td, table.raw tr.sp { padding:0; border:0; background:transparent !important; }
