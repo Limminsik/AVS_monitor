@@ -324,3 +324,5 @@ table.flist .no { color:var(--red); }
 /* 원본 값 — 줄 높이 고정(보이는 줄만 그림) */
 table.raw tbody td { height:22px; padding-top:0; padding-bottom:0; line-height:21px; }
 table.raw tr.sp td, table.raw tr.sp { padding:0; border:0; background:transparent !important; }
+.sub-h .r { margin-left:auto; }
+.sub-h .legend { margin-top:0; font-weight:400; font-size:12px; gap:10px; }

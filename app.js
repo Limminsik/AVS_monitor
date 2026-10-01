@@ -153,7 +153,8 @@ async function refresh() {
     renderCohort();
     renderProgress();
     fillSubjectPicker();
-    await selectSubject(state.sel && state.subjects.find((s) => s.info.subject_id === state.sel) ? state.sel : (state.subjects[0] || {}).info?.subject_id, true);
+    // 대상자는 고를 때만 읽는다(처음엔 아무것도 읽지 않아 가볍게)
+    if (state.sel && state.subjects.find((s) => s.info.subject_id === state.sel)) await selectSubject(state.sel, true); else showPick();
     $('stamp').textContent = `읽음 ${kstHM(state.loadedAt)}`;
   } catch (e) {
     banner(e.message === 'NO_ROOT' ? `드라이브에서 <code>${esc(CFG.rootFolderName)}</code> 폴더를 찾지 못했습니다. 연구실 계정(gachondac)으로 로그인했는지 확인하세요.` : `읽기 실패 — ${esc(e.message)}`, 'bad');
@@ -184,13 +185,18 @@ function renderCohort() {
     ['수집 완료', `${done}${small('명')}`],
   ].map(([l, v]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div></div>`).join('');
 
-  const order = ['ok', 'off'];
+  const lastAt = Math.max(0, ...state.phones.map((p) => p.at || 0));
+  $('phonesNote').textContent = state.phones.length ? `${state.sel ? state.sel + ' · ' : ''}폰 상태 파일 ${state.phones.length}개 · 가장 최근 보고 ${kstHM(lastAt)} (${ago(lastAt, now)})` : '';
+  $('progNote').textContent = `${state.subjects.length}명`;
   const subjOf = (id) => state.subjects.find((s) => s.info.subject_id === id);
-  $('phones').innerHTML = state.phones.length ? `<table class="list">
+  // 연결 상태는 고른 대상자 한 명 것만
+  const shown = state.phones.map((p, i) => ({ p, v: verdicts[i] })).filter(({ p }) => state.sel && p.subject_id === state.sel);
+  const emptyMsg = !state.phones.length ? '<div class="empty">폰 상태 파일(<code>status.json</code>)을 찾지 못했습니다 — 폰 앱이 드라이브에 상태를 올리고 있는지 확인하세요.</div>'
+    : !state.sel ? '<div class="empty">연구번호를 고르면 그 대상자를 수집하는 폰·워치의 연결 상태가 나옵니다.</div>'
+    : `<div class="empty">지금 <b>${esc(state.sel)}</b>를 수집하는 폰이 없습니다 — 수집이 끝났거나 폰에서 연구번호가 바뀌었습니다.</div>`;
+  $('phones').innerHTML = shown.length ? `<table class="list">
     <thead><tr><th>상태</th><th>대상자</th><th>워치</th><th>스마트폰</th><th>드라이브</th><th class="r">전체 행</th><th style="min-width:200px">지난 24시간</th><th>빈 곳</th></tr></thead>
-    <tbody>` + state.phones
-    .map((p, i) => ({ p, v: verdicts[i] }))
-    .sort((a, b) => order.indexOf(a.v.cls) - order.indexOf(b.v.cls))
+    <tbody>` + shown
     .map(({ p, v }) => {
       const sj = subjOf(p.subject_id);
       const today = Object.values(p.today || {}).reduce((a, n) => a + Number(n || 0), 0);
@@ -215,8 +221,8 @@ function renderCohort() {
         <td><div class="strip" data-tip="지난 24시간 · 10분 칸 · 워치 자료가 들어온 칸 ${[...cov].filter((c) => c === '1').length}/144">${[...cov].map((c) => `<i${c === '1' ? ' class="on"' : ''}></i>`).join('')}</div></td>
         <td>${!p.subject_id ? '<span class="muted">—</span>' : missN ? `<span class="miss" data-tip="${esc(holeTxt)}">${missN * 10}분 · ${holes.length}곳</span>` : '<span class="nomiss">없음</span>'}</td>
       </tr>`;
-    }).join('') + '</tbody></table>' : '<div class="empty">병동 폰 상태 파일이 없습니다.</div>';
-  document.querySelectorAll('#phones tr[data-subject]').forEach((el) => el.addEventListener('click', () => { if (el.dataset.subject) selectSubject(el.dataset.subject); }));
+    }).join('') + '</tbody></table>' : emptyMsg;
+  document.querySelectorAll('#phones tr[data-subject]').forEach((el) => el.addEventListener('click', () => openSubject(el.dataset.subject)));
 }
 
 // 수집 중인가 — 폰이 지금 이 연구번호를 들고 있거나, 종료 시각이 없거나, 종료 뒤 다시 시작했으면 수집 중
@@ -242,19 +248,28 @@ function renderProgress() {
         <td><div class="bar" data-tip="${h.toFixed(1)} / ${GOAL_HOURS}시간"><b style="width:${pct}%"></b></div></td>
         <td class="r"><b>${h.toFixed(1)}</b> / ${GOAL_HOURS}시간</td></tr>`;
     }).join('') + '</tbody></table>';
-  document.querySelectorAll('#progress tr[data-subject]').forEach((el) => el.addEventListener('click', () => selectSubject(el.dataset.subject)));
+  document.querySelectorAll('#progress tr[data-subject]').forEach((el) => el.addEventListener('click', () => openSubject(el.dataset.subject)));
 }
 
 function fillSubjectPicker() {
-  $('pickSubject').innerHTML = state.subjects.map((s) => `<option value="${esc(s.info.subject_id)}">${esc(s.info.subject_id)}</option>`).join('');
+  $('pickSubject').innerHTML = '<option value="">연구번호 고르기</option>' + state.subjects.map((s) => `<option value="${esc(s.info.subject_id)}">${esc(s.info.subject_id)}</option>`).join('');
+  $('pickSubject').value = state.sel || '';
 }
+function showPick() {
+  const m = '<div class="empty">위 «대상자 진행»이나 «연결 상태»에서 연구번호를 누르거나, 오른쪽 위에서 고르면 그 대상자 자료만 불러옵니다.</div>';
+  $('fill').innerHTML = m; $('signal').innerHTML = ''; $('pickFile').innerHTML = ''; $('fillLegend').innerHTML = '';
+  $('events').innerHTML = '<div class="empty">연구번호를 고르면 그 대상자의 수집 폰 로그가 나옵니다.</div>';
+}
+// 표에서 누르면 그 대상자를 불러오고 상세 현황으로 내려간다
+function openSubject(id) { if (!id) return; selectSubject(id); $('pickSubject').closest('section').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 
 // 연구번호 하나를 고르면 그 대상자의 날짜 폴더를 모두 읽어 한 번에 보여 준다
 async function selectSubject(id, keep) {
-  if (!id) { $('fill').innerHTML = '<div class="empty">대상자가 없습니다.</div>'; $('events').innerHTML = ''; $('signal').innerHTML = ''; return; }
+  if (!id) { state.sel = null; showPick(); renderCohort(); return; }
   const changed = state.sel !== id;
   state.sel = id;
   $('pickSubject').value = id;
+  if (changed) renderCohort();
   document.querySelectorAll('#phones tr[data-subject], #progress tr[data-subject]').forEach((c) => c.classList.toggle('sel', c.dataset.subject === id));
   const subject = state.subjects.find((s) => s.info.subject_id === id);
   if (!subject) return;
@@ -308,7 +323,7 @@ function renderFill() {
     <span>파일 수 <b>${rows.length}</b></span><span>행 <b>${fmtInt(totalRows)}</b></span>
     <span>완전성 <b>${trackers.map((t) => (trackers.length > 1 ? t + ' ' : '') + (comp[t].pct === null ? '—' : comp[t].pct.toFixed(1) + '%')).join(' · ')}</b></span>
     <span>드라이브에 안 올라간 파일 <b style="color:${unsynced ? 'var(--red)' : 'inherit'}">${unsynced}</b></span></div>`;
-  html += '<div class="heat"><table><tr><th class="tr">날짜</th>' + hours.map((h) => `<th>${pad(h)}</th>`).join('') + '</tr>';
+  html += '<div class="heat"><table><tr><th class="tr">시간(24시)</th>' + hours.map((h) => `<th>${pad(h)}</th>`).join('') + '</tr>';
   trackers.forEach((t) => {
     if (trackers.length > 1) html += `<tr><th class="grp" colspan="25">${esc(t)}</th></tr>`;
     dates.forEach((d, di) => {
@@ -323,9 +338,9 @@ function renderFill() {
     });
   });
   html += '</table></div>';
-  html += `<div class="legend"><span><i class="sw" style="background:var(--seq4)"></i>99+</span><span><i class="sw" style="background:var(--seq3)"></i>97–99</span>
+  $('fillLegend').innerHTML = `<span><i class="sw" style="background:var(--seq4)"></i>99+</span><span><i class="sw" style="background:var(--seq3)"></i>97–99</span>
     <span><i class="sw" style="background:var(--seq2)"></i>90–97</span><span><i class="sw" style="background:var(--seq1)"></i>50–90</span>
-    <span><i class="sw" style="background:var(--seq0)"></i>50 아래</span><span><i class="sw" style="background:transparent;box-shadow:inset 0 0 0 2px #E0A33A"></i>쓰는 중</span></div>`;
+    <span><i class="sw" style="background:var(--seq0)"></i>50 아래</span><span><i class="sw" style="background:transparent;box-shadow:inset 0 0 0 2px #E0A33A"></i>쓰는 중</span>`;
   $('fill').innerHTML = html;
   document.querySelectorAll('#fill td[data-t]').forEach((td) => td.addEventListener('click', () => {
     if (sig.tag !== td.dataset.tag) { $('pickFile').value = td.dataset.tag; setTracker(td.dataset.tag, +td.dataset.t); }
