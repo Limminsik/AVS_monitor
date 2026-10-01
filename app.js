@@ -789,7 +789,7 @@ function drawChannels() {
       x.beginPath(); let pen = false, pt = null;
       sig.seg.forEach(({ o, i, j }) => { const arr = o.data[col]; for (let k = i; k < j; k++) { const q = arr[k], t = o.ts[k]; if (q !== q || (pt !== null && t - pt > 1000)) pen = false; pt = t; if (q !== q) continue; pen ? x.lineTo(XX(t), YY(q)) : x.moveTo(XX(t), YY(q)); pen = true; } });
       x.stroke();
-      if (cnt <= 400) { x.fillStyle = chanColor(col); sig.seg.forEach(({ o, i, j }) => { const arr = o.data[col]; for (let k = i; k < j; k++) if (arr[k] === arr[k]) { x.beginPath(); x.arc(XX(o.ts[k]), YY(arr[k]), 1.8, 0, 7); x.fill(); } }); }
+      // 샘플 점은 그리지 않는다 — 선만. 그래프에 올리면 그 샘플에 흰 점과 값이 뜬다
     }
     const rg = $('rg_' + col); if (rg) rg.textContent = `이 창 ${fmtV(mn)} ~ ${fmtV(mx)}`;
     c._img = x.getImageData(0, 0, c.width, c.height);
