@@ -412,7 +412,7 @@ function alarmSpans() {
   return out;
 }
 
-const CACHE_MAX = 8, RAW_MAX = 3000;
+const CACHE_MAX = 8, RAW_MAX = 1500;
 const OV_SPANS = [[864e5, '24시간'], [6 * 3600e3, '6시간'], [3600e3, '1시간'], [600e3, '10분']];
 const LENS = [10, 30, 60, 300, 1800];
 const sig = { tag: null, files: [], T0: 0, T1: 0, cache: new Map(), loading: new Map(), failed: new Set(), view: { t: 0, len: 30 },
@@ -484,8 +484,21 @@ function initSignal(keep) {
     return `<option value="${esc(t)}">${esc(t)} · ${fmtMB(sz)}</option>`;
   }).join('');
   const tag = keep && sig.tag && tags.includes(sig.tag) ? sig.tag : tags[0];
+  if (keep && sig.tag === tag && $('sigBox')) { softRefresh(); return; }   // 5분 새로 읽기 — 화면은 그대로, 숫자·막대만
   if (!keep) sig.tag = null;          // 대상자가 바뀌면 처음부터
   setTracker(tag, keep && sig.tag === tag ? sig.view.t : null);
+}
+
+// 새로 읽은 manifest로 파일 목록만 바꾼다. 행 수가 늘어난(쓰는 중) 파일은 메모리에서 지워 다시 읽게 한다
+function softRefresh() {
+  const old = new Map(sig.files.map((f) => [f.name, f.rows]));
+  sig.comp = completeness(sig.tag);
+  sig.files = sig.comp.files.map((f) => ({ name: f.r.file, t0: f.t0, t1: f.t1, rows: f.n, fill: f.pct, status: f.r.status }));
+  sig.T0 = sig.files[0].t0; sig.T1 = Math.max(...sig.files.map((f) => f.t1));
+  sig.files.forEach((f) => { if (old.get(f.name) !== f.rows) { sig.cache.delete(f.name); sig.failed.delete(f.name); } });
+  sig.alarms = alarmSpans();
+  renderSigKpi();
+  seek(sig.view.t);
 }
 
 function setTracker(tag, t) {
@@ -568,21 +581,27 @@ async function ensureLoaded() {
   if (need.length) { setStatus(`읽는 중… ${need.map((f) => f.name).join(', ')}`); await Promise.all(need.map(loadFile)); setStatus(''); drawAll(); }
   // 앞뒤 파일을 미리 읽어 이어 볼 때 끊기지 않게
   const i0 = sig.files.findIndex((f) => f.t1 >= a), i1 = sig.files.findIndex((f) => f.t0 > b);
-  [sig.files[i0 - 1], i1 >= 0 ? sig.files[i1] : null].filter(Boolean).forEach((f) => loadFile(f));
+  clearTimeout(sig.preT);
+  sig.preT = setTimeout(() => [sig.files[i0 - 1], i1 >= 0 ? sig.files[i1] : null].filter(Boolean).forEach((f) => loadFile(f)), 600);   // 앞뒤 파일은 멈춘 뒤에
 }
 
 const setStatus = (t) => { const s = $('sigStatus'); if (s) s.textContent = t; };
 
-function renderSignalShell() {
+function renderSigKpi() {
   const fs = sig.files, total = fs.reduce((a, f) => a + f.rows, 0), c = sig.comp;
-  $('signal').innerHTML = `
+  $('sigKpi').innerHTML = `
     <div class="kpis small">
       <div class="kpi"><div class="l">기간</div><div class="v sm">${kstMD(c.start)} ${kstHM(c.start)} – ${kstMD(c.end)} ${kstHM(c.end)}</div></div>
       <div class="kpi"><div class="l">전체 행</div><div class="v">${fmtInt(total)}</div></div>
       <div class="kpi"><div class="l">완전성</div><div class="v">${c.pct === null ? '—' : c.pct.toFixed(1) + '%'}</div></div>
       <div class="kpi"><div class="l">파일 수</div><div class="v">${fs.length}</div></div>
-    </div>
+    </div>`;
+}
 
+function renderSignalShell() {
+  const fs = sig.files, total = fs.reduce((a, f) => a + f.rows, 0), c = sig.comp;
+  $('signal').innerHTML = `
+    <div id="sigKpi"></div>
     <div class="mon" id="sigBox">
       <div class="mon-top"><span class="row"><button class="btn ghost sm" id="dayPrev" title="앞 날">◀</button><b id="dayLbl"></b><button class="btn ghost sm" id="dayNext" title="다음 날">▶</button><span class="row ovspan">${OV_SPANS.map(([ms, l]) => `<button class="btn ghost sm" data-ov="${ms}">${l}</button>`).join('')}</span><span class="dim">막대 = 시간 파일 완전성 · 눌러서 이동 · 휠로 넓히기·좁히기</span></span><span id="sigInfo"></span></div>
       <canvas id="sigOv" height="128"></canvas>
@@ -598,6 +617,7 @@ function renderSignalShell() {
     </div>
     <h3 class="sub-h raw-h">원본 값 <span class="muted" id="rawNote"></span></h3>
     <div class="tw rawtw" id="rawBox"><table class="raw"><thead id="rawHead"></thead><tbody id="sigRows"></tbody></table></div>`;
+  renderSigKpi();
   if (sig.cols) renderChannels();
   const ov = $('sigOv');
   let dragOv = false;
@@ -669,7 +689,7 @@ function drawAll() {
   $('sigStat').innerHTML = `<span>이 창 <b>${fmtInt(n)}</b>샘플${exp ? ` / 기대 ${fmtInt(exp)}` : ''}</span><span>1초 넘는 빈틈 <b>${gaps}</b>${gaps ? ` (합 ${gapS.toFixed(1)}초)` : ''}</span><span>센서 −1 <b>${fmtInt(badN)}</b></span><span>도착 지연 중앙 <b>${lag.length ? lag[lag.length >> 1].toFixed(1) + '초' : '—'}</b></span>`;
   drawOverview();
   drawChannels();
-  renderRaw();
+  clearTimeout(sig.rawT); sig.rawT = setTimeout(renderRaw, 180);   // 원본 표는 움직임이 멈춘 뒤에 한 번
 }
 
 // 위 막대가 보여 주는 구간 — 24시간이면 그날 00–24시, 짧으면 보는 창을 가운데에
@@ -792,7 +812,7 @@ function drawChannels() {
       // 샘플 점은 그리지 않는다 — 선만. 그래프에 올리면 그 샘플에 흰 점과 값이 뜬다
     }
     const rg = $('rg_' + col); if (rg) rg.textContent = `이 창 ${fmtV(mn)} ~ ${fmtV(mx)}`;
-    c._img = x.getImageData(0, 0, c.width, c.height);
+    const snap = c._snap || (c._snap = document.createElement('canvas')); snap.width = c.width; snap.height = c.height; snap.getContext('2d').drawImage(c, 0, 0);
     c._yy = { lo, hi, T, PH };
     drawCursorOn(c);
   });
@@ -815,7 +835,7 @@ function drawCursorOn(c) {
 }
 
 function drawCursor(fromChart) {
-  document.querySelectorAll('#signal canvas.sigc').forEach((c) => { if (c._img) c.getContext('2d').putImageData(c._img, 0, 0); c.getContext('2d').setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0); drawCursorOn(c); });
+  document.querySelectorAll('#signal canvas.sigc').forEach((c) => { const x = c.getContext('2d'); if (c._snap) { x.setTransform(1, 0, 0, 1, 0, 0); x.drawImage(c._snap, 0, 0); } x.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0); drawCursorOn(c); });
   document.querySelectorAll('#sigRows tr.hl').forEach((r) => r.classList.remove('hl'));
   if (sig.hoverT === null) return;
   const nb = nearest(sig.hoverT); if (!nb) return;
