@@ -708,7 +708,7 @@ function renderSignalShell() {
       <div class="win-stat" id="sigStat"></div>
       <div id="sigChans"><div class="empty mon-empty">파일을 읽는 중…</div></div>
       <div class="readout" id="sigRead">그래프를 끌면 시간이 이어서 움직입니다 · 올리면 그 샘플 값과 아래 원본 줄이 표시됩니다 <span id="sigStatus"></span></div>
-      <div class="legend"><span><i class="sw" style="background:${chanColor('green')}"></i>측정 값</span><span><i class="sw" style="background:var(--mon-bad)"></i>센서 상태 −1</span><span><i class="sw" style="background:#FF4747"></i>빈틈(25 Hz 1초 · 1 Hz 2.5초 넘게)</span><span><i class="sw" style="background:#E6EDF3;border-radius:50%"></i>다른 이슈(폰 로그)</span><span><i class="sw" style="background:var(--mon-alarm)"></i>워치 끊김(폰 로그)</span><span><i class="sw" style="background:transparent;border-color:var(--mon-win)"></i>지금 보는 창</span></div>
+      <div class="legend"><span><i class="sw" style="background:${chanColor('green')}"></i>측정 값</span><span><i class="sw" style="background:var(--mon-bad)"></i>센서 상태 −1</span><span><i class="sw" style="background:#FF4747"></i>누락 구간(25 Hz 1초 · 1 Hz 2.5초 넘게)</span><span><i class="sw" style="background:#E6EDF3;border-radius:50%"></i>다른 이슈(폰 로그)</span><span><i class="sw" style="background:var(--mon-alarm)"></i>끊긴 구간(워치-폰)</span><span><i class="sw" style="background:transparent;border-color:var(--mon-win)"></i>지금 보는 창</span></div>
     </div>
     <h3 class="sub-h raw-h">원본 값</h3>
     <div class="tw rawtw" id="rawBox"><table class="raw"><thead id="rawHead"></thead><tbody id="sigRows"></tbody></table></div>`;
@@ -781,7 +781,7 @@ function drawAll() {
     const G = gapMs(); for (let k = i; k < j; k++) { const t = o.ts[k]; if (prev !== null && t - prev > G) { gaps++; gapS += (t - prev) / 1000; } prev = t; if (any.some((bb) => bb[k])) badN++; if ((k - i) % 25 === 0) lag.push((o.sent[k] - t) / 1000); } });
   lag.sort((p, q) => p - q);
   const exp = sig.rate ? v.len * sig.rate : 0;
-  $('sigStat').innerHTML = `<span>이 창 <b>${fmtInt(n)}</b>샘플${exp ? ` / 기대 ${fmtInt(exp)}` : ''}</span><span>빈틈 <b>${gaps}</b>${gaps ? ` (합 ${gapS.toFixed(1)}초)` : ''}</span><span>센서 −1 <b>${fmtInt(badN)}</b></span><span>도착 지연 중앙 <b>${lag.length ? lag[lag.length >> 1].toFixed(1) + '초' : '—'}</b></span>`;
+  $('sigStat').innerHTML = `<span>이 창 <b>${fmtInt(n)}</b>샘플${exp ? ` / 기대 ${fmtInt(exp)}` : ''}</span><span>누락 구간 <b>${gaps}</b>${gaps ? ` (합 ${gapS.toFixed(1)}초)` : ''}</span><span>센서 −1 <b>${fmtInt(badN)}</b></span><span>도착 지연 중앙 <b>${lag.length ? lag[lag.length >> 1].toFixed(1) + '초' : '—'}</b></span>`;
   drawOverview();
   drawChannels();
   clearTimeout(sig.rawT); sig.rawT = setTimeout(renderRaw, 180);   // 원본 표는 움직임이 멈춘 뒤에 한 번
@@ -802,11 +802,11 @@ function ovTip(t, y) {
   const f = sig.files.find((q) => t >= q.t0 && t <= q.t1);
   const parts = [`${kstDate(t).slice(5)} ${kstFull(t).slice(0, 8)}`];
   if (f) parts.push(`${f.name.replace(/\.ndjson$/, '')} · 완전성 ${f.fill === null ? '—' : f.fill.toFixed(1) + '%'}`);
-  if (al) parts.push(`워치 끊김(폰 로그) ${kstFull(al[0]).slice(0, 8)}–${kstFull(al[1]).slice(0, 8)} · ${Math.round((al[1] - al[0]) / 1000)}초 — 누르면 그 시작으로`);
+  if (al) parts.push(`끊긴 구간(워치-폰) ${kstFull(al[0]).slice(0, 8)}–${kstFull(al[1]).slice(0, 8)} · ${Math.round((al[1] - al[0]) / 1000)}초 — 누르면 그 시작으로`);
   const tol = (ovRange()[1] - ovRange()[0]) / 300, L = gapLanes(t - tol, t + tol);
-  L.gaps.forEach(([a, b]) => parts.push(`빈틈 ${kstFull(a).slice(0, 8)}–${kstFull(b).slice(0, 8)} · ${((b - a) / 1000).toFixed(1)}초`));
+  L.gaps.forEach(([a, b]) => parts.push(`누락 ${kstFull(a).slice(0, 8)}–${kstFull(b).slice(0, 8)} · ${((b - a) / 1000).toFixed(1)}초`));
   L.bad.forEach(([a, b]) => parts.push(`센서 −1 ${kstFull(a).slice(0, 8)}–${kstFull(b).slice(0, 8)} · ${Math.round((b - a) / 1000)}초`));
-  if (L.unread.length) parts.push('빈틈 확인 전(파일을 읽는 중)');
+  if (L.unread.length) parts.push('누락 확인 전(파일을 읽는 중)');
   iss.forEach((e) => parts.push(`${String(e.kst).slice(11, 19)} ${e.text} (${e.code})`));
   return parts.join(' · ');
 }
@@ -846,15 +846,15 @@ function drawOverview() {
     x.fillStyle = sig.failed.has(f.name) ? '#3A434C' : fill >= 97 ? '#1E9E50' : fill >= 90 ? '#B59A12' : '#C24A2A';
     x.fillRect(x0 + 0.5, BAR_T + BAR_H - hh, x1 - x0 - 1, hh);
   });
-  // 워치 끊김(폰 로그) — 넓으면 길이를 적음
-  x.fillStyle = cssv('--mon-dim'); x.fillText('워치 끊김(폰 로그)', 2, AL_Y - 4);
+  // 끊긴 구간(워치-폰) — 넓으면 길이를 적음
+  x.fillStyle = cssv('--mon-dim'); x.fillText('끊긴 구간(워치-폰)', 2, AL_Y - 4);
   x.fillStyle = cssv('--mon-grid2'); x.fillRect(0, AL_Y, w, 14);
   sig.alarms.forEach(([sA, eA]) => { if (!(eA > T0 && sA < T1)) return; const a = X(Math.max(sA, T0)), b = X(Math.min(eA, T1));
     x.fillStyle = cssv('--mon-alarm'); x.fillRect(a, AL_Y, Math.max(2, b - a), 14);
     const lb = (eA - sA) >= 60e3 ? `${Math.round((eA - sA) / 60e3)}분` : `${Math.round((eA - sA) / 1000)}초`;
     if (b - a > x.measureText(lb).width + 8) { x.fillStyle = '#fff'; x.fillText(lb, a + 4, AL_Y + 11); } });
-  // 실제 빈틈(자료) — 빨강 = 샘플 빈틈 · 노랑 = 센서 −1. 안 읽은 파일은 빗금. 다른 이슈(폰 로그)는 점
-  const lanes = gapLanes(T0, T1), lbl = `실제 빈틈(자료)${lanes.todo ? ` · 확인 중 ${lanes.done}/${lanes.done + lanes.todo}` : ''}`;
+  // 누락 구간(데이터) — 빨강 = 샘플 빈틈 · 노랑 = 센서 −1. 안 읽은 파일은 빗금. 다른 이슈(폰 로그)는 점
+  const lanes = gapLanes(T0, T1), lbl = `누락 구간(데이터)${lanes.todo ? ` · 확인 중 ${lanes.done}/${lanes.done + lanes.todo}` : ''}`;
   x.fillStyle = cssv('--mon-dim'); x.fillText(lbl, 2, IS_Y - 4);
   x.fillStyle = cssv('--mon-grid2'); x.fillRect(0, IS_Y, w, 10);
   lanes.unread.forEach(([a, b]) => { x.fillStyle = 'rgba(255,255,255,.06)'; x.fillRect(X(a), IS_Y, Math.max(1, X(b) - X(a)), 10); });
@@ -897,7 +897,7 @@ function drawChannels() {
     filesIn(tA, tB).forEach((f) => { if (sig.cache.has(f.name)) return; const x0 = Math.max(L, XX(f.t0)), x1 = Math.min(L + PW, XX(f.t1));
       x.fillStyle = sig.failed.has(f.name) ? 'rgba(255,255,255,.07)' : 'rgba(255,255,255,.04)'; x.fillRect(x0, T, x1 - x0, PH);
       x.fillStyle = cssv('--mon-dim'); x.fillText(sig.failed.has(f.name) ? `${f.name} 읽지 못함${f.err ? ' — ' + f.err : ''}` : `${f.name} 읽는 중…`, x0 + 8, T + 18); });
-    // 워치 끊김(폰 로그) 띠
+    // 끊긴 구간(워치-폰) 띠
     x.fillStyle = cssv('--mon-alarm'); sig.alarms.forEach(([sA, eA]) => { if (eA > tA && sA < tB) x.fillRect(XX(Math.max(sA, tA)), 0, Math.max(2, XX(Math.min(eA, tB)) - XX(Math.max(sA, tA))), 4); });
     if (!cnt) { const rg = $('rg_' + col); if (rg) rg.textContent = ''; drawCursorOn(c); return; }
     // −1 음영 · 빈틈
@@ -907,7 +907,7 @@ function drawChannels() {
       for (let k = i; k < j; k++) if (bad && bad[k]) { let e = k; while (e < j && bad[e]) e++; x.fillRect(XX(o.ts[k]), T, Math.max(2, XX(o.ts[e - 1]) - XX(o.ts[k])), PH); k = e; }
       const G = gapMs(); for (let k = i; k < j; k++) { const t = o.ts[k]; if (prevT !== null && t - prevT > G) { const x0 = XX(prevT), x1 = XX(t);
         x.fillStyle = 'rgba(255,71,71,.18)'; x.fillRect(x0, T, Math.max(2, x1 - x0), PH);
-        if (x1 - x0 > 60) { x.fillStyle = '#FF8A8A'; x.fillText(`빈틈 ${((t - prevT) / 1000).toFixed(1)}초`, x0 + 6, T + PH - 8); } } prevT = t; }
+        if (x1 - x0 > 60) { x.fillStyle = '#FF8A8A'; x.fillText(`누락 ${((t - prevT) / 1000).toFixed(1)}초`, x0 + 6, T + PH - 8); } } prevT = t; }
     });
     // 선 — 점이 많으면 픽셀마다 최소·최대
     x.strokeStyle = chanColor(col); x.lineWidth = 1.5;
@@ -950,7 +950,7 @@ function drawCursor(fromChart) {
   if (sig.hoverT === null) { if (sig.rawHl !== undefined) { sig.rawHl = -1; renderRawRows(); } return; }
   const nb = nearest(sig.hoverT); if (!nb) return;
   const o = nb.o, k = nb.k, inAlarm = sig.alarms.some(([sA, eA]) => o.ts[k] >= sA && o.ts[k] < eA);
-  $('sigRead').innerHTML = `<b>${kstDate(o.ts[k])} ${kstFull(o.ts[k])}</b> · ` + sig.chans.map((c) => `<span style="color:${chanColor(c)}">${esc(c)}</span> ${esc(o.data[c] ? o.data[c][k] : '')}`).join(' · ') + ` · 보냄 ${((o.sent[k] - o.ts[k]) / 1000).toFixed(1)}초 뒤` + (Object.values(o.bad).some((b) => b[k]) ? ' · <span style="color:#FFB300">상태 −1</span>' : '') + (inAlarm ? ' · <span style="color:#FF2D55">워치 끊김 로그 구간</span>' : '') + ' <span id="sigStatus"></span>';
+  $('sigRead').innerHTML = `<b>${kstDate(o.ts[k])} ${kstFull(o.ts[k])}</b> · ` + sig.chans.map((c) => `<span style="color:${chanColor(c)}">${esc(c)}</span> ${esc(o.data[c] ? o.data[c][k] : '')}`).join(' · ') + ` · 보냄 ${((o.sent[k] - o.ts[k]) / 1000).toFixed(1)}초 뒤` + (Object.values(o.bad).some((b) => b[k]) ? ' · <span style="color:#FFB300">상태 −1</span>' : '') + (inAlarm ? ' · <span style="color:#FF2D55">끊긴 구간(워치-폰)</span>' : '') + ' <span id="sigStatus"></span>';
   const R = sig.raw;
   if (R && R.n) {
     let i = lowerIn(R.t, R.n, o.ts[k]); if (i >= R.n) i = R.n - 1;
