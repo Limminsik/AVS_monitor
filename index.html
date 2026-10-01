@@ -28,9 +28,12 @@
   <div id="banner" class="banner" hidden></div>
 
   <section id="welcome" class="welcome">
-    <h1>병동 수집 상태를 한 화면에</h1>
-    <p>연구실 계정(gachondac)으로 로그인하면 드라이브의 <code>status.json</code> · <code>subject.json</code> · <code>manifest.csv</code> · <code>events.csv</code>를 읽어 보여 줍니다. 이 페이지에는 자료가 들어 있지 않고, 읽은 것은 브라우저 메모리에만 있다가 창을 닫으면 사라집니다.</p>
-    <p class="muted">화면만 먼저 보려면 <a href="?demo">데모(가짜 자료)</a>.</p>
+    <img class="w-mark" src="assets/daclab-mark.png" alt="" width="45" height="48">
+    <h1>AVS 코호트 수집 모니터링</h1>
+    <p class="w-sub">가천대 길병원 · 대동맥판막협착증 웨어러블 코호트</p>
+    <button type="button" class="btn w-btn" onclick="document.getElementById('btnLogin').click()">연구실 Google 계정으로 로그인</button>
+    <p class="w-note">허가된 연구실 계정만 볼 수 있습니다. 이 페이지에는 자료가 저장되어 있지 않으며, 로그인 뒤 불러온 내용은 이 창을 닫으면 사라집니다.</p>
+    <p class="w-demo"><a href="?demo">예시 화면 보기</a></p>
   </section>
 
   <div id="app" hidden>

@@ -175,8 +175,8 @@ function banner(html, kind) {
 function renderCohort() {
   const now = Date.now();
   const verdicts = state.phones.map((p) => (p.subject_id ? { cls: 'ok', text: '수집 중' } : { cls: 'off', text: '완료' }));
-  const current = state.subjects.filter((s) => !s.info.ended_at).length;
-  const done = state.subjects.filter((s) => s.info.ended_at).length;
+  const current = state.subjects.filter(isRunning).length;
+  const done = state.subjects.length - current;
   const small = (t) => `<small style="font-size:14px;color:var(--ink3);font-weight:500"> ${t}</small>`;
   $('kpis').innerHTML = [
     ['코호트', `${state.subjects.length}${small('/ ' + GOAL_SUBJECTS + '명')}`],
@@ -219,16 +219,30 @@ function renderCohort() {
   document.querySelectorAll('#phones tr[data-subject]').forEach((el) => el.addEventListener('click', () => { if (el.dataset.subject) selectSubject(el.dataset.subject); }));
 }
 
+// 수집 중인가 — 폰이 지금 이 연구번호를 들고 있거나, 종료 시각이 없거나, 종료 뒤 다시 시작했으면 수집 중
+// (같은 번호를 끝냈다 다시 시작하면 폰 앱이 subject.json에 옛 종료 시각을 남기는 경우가 있어 폰 상태로 함께 본다)
+function isRunning(s) {
+  const i = s.info;
+  if (state.phones.some((p) => p.subject_id && p.subject_id === i.subject_id)) return true;
+  return !i.ended_at || (i.started_at && i.ended_at < i.started_at);
+}
+const kstMDHM = (ms) => (ms ? `${kstDate(ms).slice(5)} ${kstHM(ms)}` : '—');
+
+// 대상자 진행 — 표: 번호(등록 순) · 연구번호 · 상태 · 시작 · 종료 · 누적 수집 시간
 function renderProgress() {
   if (!state.subjects.length) { $('progress').innerHTML = '<div class="empty">대상자 파일(subject.json)이 없습니다.</div>'; return; }
-  $('progress').innerHTML = '<div class="prog">' + state.subjects.map((s) => {
-    const info = s.info, h = (info.total_collected_min || 0) / 60;
-    const pct = Math.min(100, (h / GOAL_HOURS) * 100);
-    const ended = info.ended_at ? ` · 종료 ${esc(String(info.ended_at_kst || '').slice(5, 10))}` : '';
-    return `<div class="who">${esc(info.subject_id)}<div class="meta">시작 ${esc(String(info.started_at_kst || '').slice(5, 16))}${ended}</div></div>
-      <div class="bar" data-tip="${h.toFixed(1)} / ${GOAL_HOURS}시간"><b style="width:${pct}%"></b></div>
-      <div class="num"><b>${h.toFixed(1)}</b> / ${GOAL_HOURS}시간</div>`;
-  }).join('') + '</div>';
+  const list = state.subjects.slice().sort((a, b) => (a.info.started_at || 0) - (b.info.started_at || 0));
+  $('progress').innerHTML = `<table class="list ptab"><thead><tr><th class="r" style="width:44px">No.</th><th>연구번호</th><th>상태</th><th>시작</th><th>종료</th><th style="width:40%">누적 수집</th><th class="r">시간</th></tr></thead><tbody>` +
+    list.map((s, k) => {
+      const info = s.info, h = (info.total_collected_min || 0) / 60, pct = Math.min(100, (h / GOAL_HOURS) * 100), run = isRunning(s);
+      return `<tr data-subject="${esc(info.subject_id)}" class="${state.sel === info.subject_id ? 'sel' : ''}">
+        <td class="r num">${k + 1}</td><td class="subj">${esc(info.subject_id)}</td>
+        <td><span class="pill ${run ? 'ok' : 'off'}">${run ? '수집 중' : '완료'}</span></td>
+        <td>${kstMDHM(info.started_at)}</td><td>${run ? '—' : kstMDHM(info.ended_at)}</td>
+        <td><div class="bar" data-tip="${h.toFixed(1)} / ${GOAL_HOURS}시간"><b style="width:${pct}%"></b></div></td>
+        <td class="r"><b>${h.toFixed(1)}</b> / ${GOAL_HOURS}시간</td></tr>`;
+    }).join('') + '</tbody></table>';
+  document.querySelectorAll('#progress tr[data-subject]').forEach((el) => el.addEventListener('click', () => selectSubject(el.dataset.subject)));
 }
 
 function fillSubjectPicker() {
@@ -241,7 +255,7 @@ async function selectSubject(id, keep) {
   const changed = state.sel !== id;
   state.sel = id;
   $('pickSubject').value = id;
-  document.querySelectorAll('#phones tr[data-subject]').forEach((c) => c.classList.toggle('sel', c.dataset.subject === id));
+  document.querySelectorAll('#phones tr[data-subject], #progress tr[data-subject]').forEach((c) => c.classList.toggle('sel', c.dataset.subject === id));
   const subject = state.subjects.find((s) => s.info.subject_id === id);
   if (!subject) return;
   $('fill').innerHTML = '<div class="empty">날짜 폴더를 읽는 중…</div>';

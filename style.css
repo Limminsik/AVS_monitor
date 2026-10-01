@@ -48,8 +48,14 @@ main { max-width:1600px; margin:0 auto; padding:20px 24px 4px; }
 .banner { margin:0 0 16px; padding:10px 14px; font-size:13.5px; border-radius:var(--r); background:var(--amber-soft); color:var(--ink); border:1px solid var(--amber-line); border-left:4px solid var(--amber); }
 .banner.demo { background:var(--accent-soft); border-color:#9DB8DD; border-left-color:var(--accent); }
 .banner.bad { background:var(--red-soft); border-color:#E7A1A1; border-left-color:var(--red); }
-.welcome { max-width:680px; margin:40px auto; background:var(--surface); border:1px solid var(--line); padding:20px 24px; }
-.welcome h1 { font-size:20px; margin:0 0 10px; }
+.welcome { max-width:440px; margin:56px auto 40px; background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:32px 32px 24px; text-align:center; box-shadow:var(--shadow); }
+.welcome .w-mark { height:48px; width:auto; display:block; margin:0 auto 14px; }
+.welcome h1 { font-size:20px; font-weight:600; margin:0 0 6px; letter-spacing:-.01em; }
+.welcome .w-sub { color:var(--ink3); font-size:13.5px; margin:0 0 22px; }
+.welcome .w-btn { width:100%; padding:10px 14px; font-size:14px; }
+.welcome .w-note { color:var(--ink3); font-size:12px; line-height:1.6; margin:16px 0 0; }
+.welcome .w-demo { font-size:12px; margin:8px 0 0; }
+.welcome .w-demo a { color:var(--ink3); }
 
 /* 판(패널) */
 .block { background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:0 0 16px; margin:0 0 16px; box-shadow:var(--shadow); }
@@ -309,3 +315,9 @@ table.flist .no { color:var(--red); }
 .foot .partners { margin-left:auto; display:flex; gap:18px; align-items:center; }
 .foot .partners img { height:24px; width:auto; display:block; }
 @media (max-width: 760px) { .foot { flex-wrap:wrap; } .foot .partners { margin-left:0; width:100%; gap:14px; } .foot .partners img { height:20px; } }
+/* 대상자 진행 표 */
+#progress.scroll { max-height:260px; border:1px solid var(--line2); border-radius:var(--r); padding-right:0; }
+#progress table.list th { position:sticky; top:0; z-index:1; }
+#progress td.num { color:var(--ink3); font-variant-numeric:tabular-nums; }
+#progress .bar { margin-top:6px; }
+#progress td { vertical-align:middle; }
