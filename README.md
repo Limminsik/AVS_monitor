@@ -1,62 +1,62 @@
-# AVS 모니터링
+<p align="center">
+  <img src="assets/daclab-logo.png" alt="DAC LAB" height="44">&nbsp;&nbsp;&nbsp;
+  <img src="assets/gil-logo.png" alt="Gachon University Gil Medical Center" height="34">&nbsp;&nbsp;&nbsp;
+  <img src="assets/gachon-logo.png" alt="Gachon University" height="34">
+</p>
 
-병동 폰이 구글 드라이브(`AVS_raw`)에 올리는 요약 파일을 읽어 수집 상태를 보여 주는 한 페이지.
+# AVS Monitor
 
-- 읽는 것: `_system/phones/*/status.json` · `subjects/*/subject.json` · 날짜 폴더의 `manifest.csv` · `events.csv`, 그리고 «측정 값»에서 고른 시 파일(`.ndjson`) 하나.
-- 이 페이지와 저장소에는 **자료가 없다.** 열 때 연구실 계정으로 로그인하면 브라우저가 드라이브에서 직접 읽고, 메모리에만 둔다(저장하지 않음). 창을 닫으면 사라진다.
-- 서버 없음. GitHub Pages 같은 정적 호스팅에 그대로 올린다.
-- 화면만 먼저 보려면 주소 뒤에 `?demo` — 가짜 자료로 그린다.
+**대동맥판막협착증(AVS) 웨어러블 생체신호 코호트 — 수집 모니터링 플랫폼**
+*Wearable biosignal cohort for aortic valve stenosis — data-collection monitoring platform*
 
-## 처음 한 번
+🔗 **https://limminsik.github.io/AVS_monitor/** (연구진 로그인 필요 · 예시 화면은 첫 화면의 «예시 화면 보기»)
 
-1. **구글 클라우드 콘솔** → 폰 앱과 같은 프로젝트(`avs-cohort`) → API 및 서비스 → 사용자 인증 정보 → **OAuth 클라이언트 ID** «AVS Monitor»(웹 애플리케이션).
-   - 승인된 JavaScript 원본: `https://limminsik.github.io` · `http://localhost:8000`
-   - 리디렉션 URI는 비워 둔다.
-2. 클라이언트 ID는 `config.js`의 `clientId`에 있다(비밀 값이 아니다).
-3. 코드는 `AVS_WATCH` 저장소의 이 폴더(`monitor/`)에서 고치고 커밋한다. 공개 저장소에는 **이 폴더만** 올린다:
-   ```
-   git subtree push --prefix=monitor https://github.com/Limminsik/AVS_monitor.git main
-   ```
-   처음 한 번만 GitHub › AVS_monitor › Settings › Pages › Build and deployment › Branch `main` · `/ (root)` → Save.
-   주소: `https://limminsik.github.io/AVS_monitor/`
-4. 열고 «구글 로그인» → **gachondac 계정** → 권한 허용.
+---
 
-범위는 폰 앱과 같은 `drive.file` 하나다. 이 범위는 «같은 프로젝트의 앱이 만든 파일»만 보이므로, 웹 클라이언트를 **반드시 같은 프로젝트**에 만든다. 로그인했는데 아무것도 안 보이면 이것부터 확인한다.
+## 연구 소개
 
-## 로컬에서 보기
+**신호 품질 지표(SQI) 기반 고품질 생체신호 코호트 구축과 대동맥판막협착증 조기 위험 탐지를 위한 인공지능 방법론 개발**
 
+대동맥판막협착증은 증상이 늦게 나타나고 진행이 빨라 조기 발견이 중요한 판막 질환입니다. 이 연구는 입원 환자가 손목에 착용한 스마트워치로 생체신호(광용적맥파 PPG 등)를 연속으로 수집해 **품질이 검증된 웨어러블 코호트**를 만들고, 이를 바탕으로 **위험을 조기에 탐지하는 인공지능 방법론**을 개발합니다.
+
+| | |
+|---|---|
+| 수행 | 가천대학교 DAC LAB(Data Science & AI Convergence) · 가천대 길병원 심혈관센터 |
+| 대상 | 대동맥판막협착증 입원 환자 코호트 (목표 100명) |
+| 수집 | 스마트워치(Galaxy Watch) 연속 착용 — 대상자당 입원 기간 최대 5일 · 100시간 |
+| 신호 | PPG(초록 · 적외선 · 빨강) 중심, 심박 · 박동 간격(IBI) · 가속도 등 |
+| 핵심 | 신호 품질 지표(SQI)로 걸러낸 고품질 자료 · 수집 과정의 완전성 관리 |
+
+## 수집 흐름
+
+```mermaid
+flowchart LR
+  W["⌚ 스마트워치<br/>연속 측정"] -- 블루투스 --> P["📱 병동 스마트폰<br/>전부 보관"]
+  P -- 15분마다 --> D["☁️ 연구용 클라우드 저장소<br/>연구번호별"]
+  D -- 읽기 전용 --> M["🖥️ AVS Monitor<br/>연구진 확인"]
 ```
-cd <이 폴더>
-python -m http.server 8000
-```
-→ `http://localhost:8000/?demo` (데모) 또는 `http://localhost:8000/` (로그인)
 
-## 화면
+워치는 측정하고 보내기만, 병동 폰은 받은 자료를 모두 보관하고 올리기만 합니다. 연구진은 병동에 가지 않고도 이 모니터링 화면에서 수집이 빠짐없이 이어지는지 확인합니다.
 
-| 칸 | 무엇 | 어디서 |
-|---|---|---|
-| AVS Cohort | 코호트(/100명) · 현재 수집(종료 안 된 대상자) · 수집 완료(종료된 대상자) / 대상자 진행(누적 수집 시간 / 100시간, 칸 안에서 스크롤) / 연결 상태 — 한 줄에 폰 한 대: 상태(대상자가 걸려 있으면 «수집 중», 없으면 «완료») · 대상자 · 워치(마지막 수신) · 스마트폰(마지막 보고) · 드라이브(마지막 올림 · 밀림) · 전체 행 · 지난 24시간 10분 칸 · 빈 곳(대상자 시작 뒤 자료 없는 10분 칸) | `status.json` · `subject.json` |
-| 상세 현황 › 수집 상태 | 연구번호 하나의 전 기간 — 날짜(줄) × 시(칸), 칸 = 한 시간 파일, 숫자 = 그 파일의 완전성 · 칸을 누르면 그 시각으로 | 날짜 폴더마다 `manifest.csv` |
-| 상세 현황 › 측정 값 | 트래커를 고르면(PPG · ACC 등, manifest의 tracker) 그 트래커 파일만 읽고, 채널은 파일 머리의 열 이름에서 정함 · 전 기간을 시간축 하나로 — 위: 막대(시간 파일 완전성 · 워치 끊김 폰 로그 · 다른 이슈 폰 로그 · 지금 보는 창) — 24시간·6시간·1시간·10분으로 넓히고 좁힘(버튼·휠), ◀ ▶로 날을 바꾸고 눌러서·끌어서·슬라이더로 이동, 올리면 시각·파일·로그가 뜸 / 가운데: 채널별 파형(10초~30분 창, 그래프를 끌면 시간 파일 경계를 넘어 이어짐) / 아래: 원본 값 표(창 안의 줄을 파일에 적힌 그대로, 그래프에 올리면 같은 줄이 표시됨) | 날짜 폴더의 `.ndjson` — 보는 창이 걸친 시간 파일만 읽고 앞뒤 파일은 미리 읽음, 최근 8개만 메모리에 |
-| 로그 | 폰이 남긴 events.csv 전 기간(최근이 위) · «이슈만 보기» | `events.csv` |
+## 모니터링 플랫폼
 
-## 완전성
+| 화면 | 보여 주는 것 |
+|---|---|
+| **AVS Cohort** | 등록 인원 · 현재 수집 · 수집 완료, 대상자별 누적 수집 시간, 기기별 연결 상태와 지난 24시간 빈 구간 |
+| **상세 현황** | 대상자 한 명의 전 기간 수집 상태(날짜 × 시간)와 시간대별 수신율 |
+| **측정 값** | 수집된 신호를 시간축 하나로 이어 보는 파형 화면과, 같은 구간의 원본 값 |
+| **로그** | 수집 기기가 남긴 기록과 이슈 |
 
-완전성(수신율) = 받은 행 ÷ (명세 주기 × 수집 기간)
+- 대상자는 **연구번호로만** 표시됩니다.
+- 이 저장소에는 **연구 자료가 없습니다.** 허가된 연구 계정으로 로그인했을 때만 브라우저가 자료를 읽기 전용으로 불러오고, 창을 닫으면 사라집니다.
+- 서버 없이 정적 웹(HTML · CSS · JavaScript) + Google 로그인으로 동작합니다.
 
-- 수집 기간 = 대상자 시작(`subject.json`의 `started_at`) ~ 마지막 샘플(종료했으면 `ended_at`)
-- 시간 파일 한 칸의 기대 구간 = 앞 파일의 마지막 샘플 ~ 이 파일의 마지막 샘플(첫 파일은 대상자 시작부터) — 파일 사이와 첫 샘플 전의 빈 시간도 기대 값에 들어간다
-- 센서 상태 −1 샘플도 받은 행으로 센다
+---
 
-## 파일
+### English summary
 
-- `index.html` — 쪽 뼈대
-- `style.css` — 모양
-- `app.js` — 로그인 · 드라이브 읽기 · 그리기 · 데모 자료
-- `config.js` — 클라이언트 ID
-- `assets/` — DAC LAB 로고(머리 줄 · 꼬리말)
-- `LICENSE`
+AVS Monitor is the data-collection monitoring platform of a wearable biosignal cohort study on **aortic valve stenosis (AVS)**, conducted by **DAC LAB, Gachon University** with **Gachon University Gil Medical Center**. Inpatients wear a smartwatch that continuously records PPG and related signals; a ward phone stores and uploads the data, and researchers use this page to check that collection is complete and continuous. The study aims to build an SQI-verified, high-quality wearable cohort and to develop AI methods for early risk detection. No research data is stored in this repository.
 
-## 라이선스
+## License
 
-© 2026 Minsik Lim. All rights reserved. — `LICENSE`
+© 2026 Minsik Lim. All rights reserved. — [`LICENSE`](LICENSE)
