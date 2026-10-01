@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>AVS 모니터링</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/pretendard@1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="style.css">
+<script src="config.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <img class="mark" src="assets/daclab-mark.png" alt="DAC LAB" width="27" height="29">
+    <div><div class="name">AVS 모니터링</div></div>
+  </div>
+  <div class="actions">
+    <span id="stamp" class="stamp"></span>
+    <button id="btnRefresh" class="btn ghost" hidden>새로고침</button>
+    <button id="btnLogin" class="btn">구글 로그인</button>
+    <button id="btnLogout" class="btn ghost" hidden>로그아웃</button>
+  </div>
+</header>
+
+<main>
+  <div id="banner" class="banner" hidden></div>
+
+  <section id="welcome" class="welcome">
+    <h1>병동 수집 상태를 한 화면에</h1>
+    <p>연구실 계정(gachondac)으로 로그인하면 드라이브의 <code>status.json</code> · <code>subject.json</code> · <code>manifest.csv</code> · <code>events.csv</code>를 읽어 보여 줍니다. 이 페이지에는 자료가 들어 있지 않고, 읽은 것은 브라우저 메모리에만 있다가 창을 닫으면 사라집니다.</p>
+    <p class="muted">화면만 먼저 보려면 <a href="?demo">데모(가짜 자료)</a>.</p>
+  </section>
+
+  <div id="app" hidden>
+    <section class="block">
+      <div class="block-head"><h2>AVS Cohort</h2></div>
+      <div id="kpis" class="kpis"></div>
+      <h3 class="sub-h">대상자 진행</h3>
+      <div id="progress" class="scroll"></div>
+      <h3 class="sub-h">연결 상태</h3>
+      <div id="phones" class="tw"></div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <h2>상세 현황</h2>
+        <div class="pickers"><select id="pickSubject" aria-label="연구번호"></select></div>
+      </div>
+      <h3 class="sub-h first">수집 상태</h3>
+      <div id="fill"></div>
+      <h3 class="sub-h"><span>측정 값</span><select id="pickFile" aria-label="트래커"></select></h3>
+      <div id="signal"></div>
+    </section>
+
+    <section class="block">
+      <div class="block-head">
+        <h2>로그</h2>
+        <label class="toggle"><input type="checkbox" id="issuesOnly"> 이슈만 보기</label>
+      </div>
+      <div id="events"></div>
+    </section>
+  </div>
+</main>
+
+<footer class="foot">
+  <img class="foot-logo" src="assets/daclab-logo.png" alt="DAC LAB — Data Science &amp; AI Convergence" width="79" height="24">
+  <span class="lic">© 2026 Minsik Lim. All rights reserved.</span>
+  <span class="partners">
+    <img src="assets/gil-logo.png" alt="가천대 길병원 Gachon University Gil Medical Center" width="114" height="24">
+    <img src="assets/gachon-logo.png" alt="가천대학교 Gachon University" width="99" height="24">
+  </span>
+</footer>
+<div id="tip" class="tip" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
