@@ -134,10 +134,11 @@ async function loadDates(subject) {
 
 async function loadDay(dateFolder) {
   if (DEMO) return demo.day(dateFolder);
-  const files = await listAll(`'${dateFolder.id}' in parents and trashed=false`, 'id,name,size');
+  const files = await listAll(`'${dateFolder.id}' in parents and trashed=false`, 'id,name,size,modifiedTime');
   const get = async (name) => { const f = files.find((x) => x.name === name); return f ? parseCsv(await fileText(f.id)) : []; };
   const [manifest, events] = await Promise.all([get('manifest.csv'), get('events.csv')]);
-  return { manifest, events, files: files.filter((f) => f.name.endsWith('.ndjson')) };
+  const mf = files.find((x) => x.name === 'manifest.csv');
+  return { manifest, events, manifestAt: mf && mf.modifiedTime ? Date.parse(mf.modifiedTime) : 0, files: files.filter((f) => f.name.endsWith('.ndjson')) };
 }
 
 async function refresh() {
@@ -175,7 +176,6 @@ function banner(html, kind) {
 
 function renderCohort() {
   const now = Date.now();
-  const verdicts = state.phones.map((p) => (p.subject_id ? { cls: 'ok', text: '수집 중' } : { cls: 'off', text: '완료' }));
   const current = state.subjects.filter(isRunning).length;
   const done = state.subjects.length - current;
   const small = (t) => `<small style="font-size:14px;color:var(--ink3);font-weight:500"> ${t}</small>`;
@@ -185,44 +185,57 @@ function renderCohort() {
     ['수집 완료', `${done}${small('명')}`],
   ].map(([l, v]) => `<div class="kpi"><div class="l">${l}</div><div class="v">${v}</div></div>`).join('');
 
-  const lastAt = Math.max(0, ...state.phones.map((p) => p.at || 0));
-  $('phonesNote').textContent = state.phones.length ? `${state.sel ? state.sel + ' · ' : ''}폰 상태 파일 ${state.phones.length}개 · 가장 최근 보고 ${kstHM(lastAt)} (${ago(lastAt, now)})` : '';
   $('progNote').textContent = `${state.subjects.length}명`;
-  const subjOf = (id) => state.subjects.find((s) => s.info.subject_id === id);
-  // 연결 상태는 고른 대상자 한 명 것만
-  const shown = state.phones.map((p, i) => ({ p, v: verdicts[i] })).filter(({ p }) => state.sel && p.subject_id === state.sel);
-  const emptyMsg = !state.phones.length ? '<div class="empty">폰 상태 파일(<code>status.json</code>)을 찾지 못했습니다 — 폰 앱이 드라이브에 상태를 올리고 있는지 확인하세요.</div>'
-    : !state.sel ? '<div class="empty">연구번호를 고르면 그 대상자를 수집하는 폰·워치의 연결 상태가 나옵니다.</div>'
-    : `<div class="empty">지금 <b>${esc(state.sel)}</b>를 수집하는 폰이 없습니다 — 수집이 끝났거나 폰에서 연구번호가 바뀌었습니다.</div>`;
-  $('phones').innerHTML = shown.length ? `<table class="list">
+  renderConn();
+}
+
+// 연결 상태 — 고른 대상자 폴더의 manifest.csv · events.csv로 만든다 (폰 status.json은 있으면 폰 번호만 보탠다)
+const kstMs = (s) => { const t = Date.parse(String(s || '').trim().replace(' ', 'T') + '+09:00'); return isNaN(t) ? 0 : t; };
+function renderConn() {
+  const now = Date.now(), id = state.sel;
+  const sj = id && state.subjects.find((s) => s.info.subject_id === id);
+  if (!id || !sj) { $('phonesNote').textContent = ''; $('phones').innerHTML = '<div class="empty">연구번호를 고르면 그 대상자의 워치·폰·드라이브 연결 상태가 나옵니다.</div>'; return; }
+  if (state.connFor !== id) { $('phonesNote').textContent = id; $('phones').innerHTML = '<div class="empty">대상자 폴더를 읽는 중…</div>'; return; }
+  const man = (state.manifest || []).filter((r) => r.file);
+  if (!man.length) { $('phonesNote').textContent = id; $('phones').innerHTML = '<div class="empty">이 대상자 폴더에 manifest.csv가 아직 없습니다.</div>'; return; }
+  const run = isRunning(sj);
+  const lastRow = man.reduce((a, r) => (+r.last_ts > +a.last_ts ? r : a));
+  const lastSample = +lastRow.last_ts || 0;
+  const phoneAt = Math.max(0, ...man.map((r) => kstMs(r.updated_kst)));
+  const driveAt = Math.max(0, ...(state.days || []).map((d) => d.manifestAt || 0)) || phoneAt;
+  const unsynced = man.filter((r) => r.synced !== 'yes').length;
+  const total = man.reduce((a, r) => a + Number(r.rows || 0), 0);
+  const ph = state.phones.find((p) => p.subject_id === id);
+  // 지난 24시간 — 10분 칸. 파일이 덮는 구간에서 워치 끊김(watch_lost~watch_back)을 뺀다. 수집이 끝났으면 마지막 샘플까지의 24시간
+  const end = run ? now : (lastSample || now), slot0 = end - 144 * 600e3, from = sj.info.started_at || Math.min(...man.map((r) => +r.first_ts));
+  const spans = man.map((r) => [+r.first_ts, +r.last_ts]).filter(([x, y]) => y >= x);
+  const evs = (state.events || []).map((e) => ({ code: e.code, ms: kstMs(e.kst) })).filter((e) => e.ms).sort((a, b) => a.ms - b.ms);
+  const lost = []; let o = null;
+  evs.forEach((e) => { if (e.code === 'watch_lost' && o === null) o = e.ms; if (e.code === 'watch_back' && o !== null) { lost.push([o, e.ms]); o = null; } });
+  if (o !== null) lost.push([o, end]);
+  const hit = (list, a, b) => list.some(([x, y]) => x < b && y > a);
+  const cov = Array.from({ length: 144 }, (_, i) => { const a = slot0 + i * 600e3, b = a + 600e3;
+    if (b <= from) return 'pre';
+    return hit(spans, a, b) && !lost.some(([x, y]) => x <= a && y >= b) ? 'on' : 'off'; });
+  const holes = []; let h0 = null;
+  cov.forEach((c, i) => { const t = slot0 + i * 600e3; if (c === 'off' && h0 === null) h0 = t; if (c !== 'off' && h0 !== null) { holes.push([h0, t]); h0 = null; } });
+  if (h0 !== null) holes.push([h0, end]);
+  const missN = holes.reduce((a, [x, y]) => a + Math.round((y - x) / 600e3), 0);
+  const onN = cov.filter((c) => c === 'on').length, cntN = cov.filter((c) => c !== 'pre').length;
+  const holeTxt = holes.map(([x, y]) => `${kstHM(x)}–${kstHM(y)}`).join(', ');
+  $('phonesNote').textContent = `${id} · 대상자 폴더 기준 · 마지막 갱신 ${kstHM(phoneAt)} (${ago(phoneAt, now)})`;
+  $('phones').innerHTML = `<table class="list">
     <thead><tr><th>상태</th><th>대상자</th><th>워치</th><th>스마트폰</th><th>드라이브</th><th class="r">전체 행</th><th style="min-width:200px">지난 24시간</th><th>빈 곳</th></tr></thead>
-    <tbody>` + shown
-    .map(({ p, v }) => {
-      const sj = subjOf(p.subject_id);
-      const today = Object.values(p.today || {}).reduce((a, n) => a + Number(n || 0), 0);
-      const total = sj ? (sj.info.days || []).reduce((a, d) => a + Number(d.rows || 0), 0) : 0;
-      const cov = String(p.coverage_24h || '').padStart(144, '0').slice(-144);
-      // 10분 칸 — 대상자 시작 뒤 칸만 셈
-      const slot0 = (p.at || now) - 144 * 600e3, from = sj && sj.info.started_at ? sj.info.started_at : (p.subject_id ? slot0 : Infinity);
-      const holes = []; let open = null;
-      [...cov].forEach((c, i) => { const t = slot0 + i * 600e3; const counted = t + 600e3 > from; const miss = counted && c !== '1';
-        if (miss && open === null) open = t; if (!miss && open !== null) { holes.push([open, t]); open = null; } });
-      if (open !== null) holes.push([open, slot0 + 144 * 600e3]);
-      const missN = holes.reduce((a, [x, y]) => a + Math.round((y - x) / 600e3), 0);
-      const holeTxt = holes.map(([x, y]) => `${kstHM(x)}–${kstHM(y)}`).join(', ');
-      const drive = p.drive_last_ok_at ? `${kstHM(p.drive_last_ok_at)} <span class="muted">${ago(p.drive_last_ok_at, now)}</span>${p.drive_pending_files ? ` · 밀림 ${p.drive_pending_files}` : ''}` : '—';
-      return `<tr class="st-${v.cls}${state.sel && state.sel === p.subject_id ? ' sel' : ''}" data-subject="${esc(p.subject_id)}">
-        <td><span class="pill ${v.cls}">${esc(v.text)}</span></td>
-        <td class="subj">${esc(p.subject_id || '—')}</td>
-        <td>${kstHM(p.last_sample_at)} <span class="muted">${ago(p.last_sample_at, now)}</span><div class="id">${esc(String(p.watch_device_id || '').slice(0, 8) || '—')}</div></td>
-        <td>${kstHM(p.at)} <span class="muted">${ago(p.at, now)}</span><div class="id">${esc(String(p.phone_id || '').slice(0, 8))} · ${esc(p.app_version || '')}</div></td>
-        <td>${drive}</td>
-        <td class="r" data-tip="오늘 ${fmtInt(today)}행">${sj ? fmtInt(total) : '—'}</td>
-        <td><div class="strip" data-tip="지난 24시간 · 10분 칸 · 워치 자료가 들어온 칸 ${[...cov].filter((c) => c === '1').length}/144">${[...cov].map((c) => `<i${c === '1' ? ' class="on"' : ''}></i>`).join('')}</div></td>
-        <td>${!p.subject_id ? '<span class="muted">—</span>' : missN ? `<span class="miss" data-tip="${esc(holeTxt)}">${missN * 10}분 · ${holes.length}곳</span>` : '<span class="nomiss">없음</span>'}</td>
-      </tr>`;
-    }).join('') + '</tbody></table>' : emptyMsg;
-  document.querySelectorAll('#phones tr[data-subject]').forEach((el) => el.addEventListener('click', () => openSubject(el.dataset.subject)));
+    <tbody><tr class="st-${run ? 'ok' : 'off'} sel">
+      <td><span class="pill ${run ? 'ok' : 'off'}">${run ? '수집 중' : '완료'}</span></td>
+      <td class="subj">${esc(id)}</td>
+      <td data-tip="마지막 샘플 시각">${kstHM(lastSample)} <span class="muted">${ago(lastSample, now)}</span><div class="id">${esc(String(lastRow.watch || '').slice(0, 8) || '—')}</div></td>
+      <td data-tip="폰이 manifest를 마지막으로 고친 시각">${kstHM(phoneAt)} <span class="muted">${ago(phoneAt, now)}</span><div class="id">${ph ? esc(String(ph.phone_id || '').slice(0, 8)) + ' · ' + esc(ph.app_version || '') : '—'}</div></td>
+      <td data-tip="드라이브에 manifest가 마지막으로 올라온 시각">${kstHM(driveAt)} <span class="muted">${ago(driveAt, now)}</span>${unsynced ? `<div class="id" style="color:var(--red)">대기 ${unsynced}파일</div>` : ''}</td>
+      <td class="r">${fmtInt(total)}</td>
+      <td><div class="strip" data-tip="지난 24시간 · 10분 칸 · 자료가 있는 칸 ${onN}/${cntN}">${cov.map((c) => `<i${c === 'on' ? ' class="on"' : ''}></i>`).join('')}</div></td>
+      <td>${missN ? `<span class="miss" data-tip="${esc(holeTxt)}">${missN * 10}분 · ${holes.length}곳</span>` : '<span class="nomiss">없음</span>'}</td>
+    </tr></tbody></table>`;
 }
 
 // 수집 중인가 — 폰이 지금 이 연구번호를 들고 있거나, 종료 시각이 없거나, 종료 뒤 다시 시작했으면 수집 중
@@ -268,6 +281,7 @@ async function selectSubject(id, keep) {
   if (!id) { state.sel = null; showPick(); renderCohort(); return; }
   const changed = state.sel !== id;
   state.sel = id;
+  if (changed) state.connFor = null;
   $('pickSubject').value = id;
   if (changed) renderCohort();
   document.querySelectorAll('#phones tr[data-subject], #progress tr[data-subject]').forEach((c) => c.classList.toggle('sel', c.dataset.subject === id));
@@ -280,6 +294,8 @@ async function selectSubject(id, keep) {
   state.manifest = state.days.flatMap((d) => d.manifest.map((r) => ({ ...r, date: d.date })));
   state.events = state.days.flatMap((d) => d.events);
   state.fileIndex = new Map(state.days.flatMap((d) => (d.files || []).map((f) => [f.name, f])));
+  state.connFor = id;
+  renderConn();
   renderFill();
   renderEvents();
   initSignal(keep && !changed);
