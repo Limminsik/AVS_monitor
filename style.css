@@ -328,7 +328,8 @@ table.raw tr.sp td, table.raw tr.sp { padding:0; border:0; background:transparen
 .sub-h .legend { margin-top:0; font-weight:400; font-size:12px; gap:10px; }
 
 /* v2 — 대상자 관리 */
-.v2tag { font-size:11px; font-weight:600; padding:2px 6px; border-radius:4px; background:#F9A825; color:#1B2430; margin-left:6px; vertical-align:middle; }
+/* 머리 막대의 웹 판 — 작고 흐린 회색(`.stamp` 와 같은 색). 값은 app.js 의 VERSION 하나에서 온다. */
+.webver { font-size:11px; font-weight:400; color:#B3C0D0; margin-left:6px; vertical-align:middle; }
 #ctl .list td { vertical-align:middle; }
 #ctl .acts { display:flex; gap:6px; flex-wrap:wrap; }
 #ctl .btn.sm { padding:4px 10px; font-size:12px; }

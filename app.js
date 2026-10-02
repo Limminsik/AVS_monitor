@@ -2,7 +2,8 @@
 /* AVS 모니터링 — 드라이브의 상태·요약 파일을 읽어 그린다. 자료는 메모리에만 둔다. */
 
 const CFG = Object.assign({ clientId: '', rootFolderName: 'AVS_raw', refreshMinutes: 5, fastSeconds: 15, ackPollSeconds: 20, ackWarnMinutes: 2 }, window.AVS_CONFIG || {});
-const VERSION = 'monitor 0.1';
+/* 머리 막대에 작게 보이는 웹 판. 폰·워치 앱과 같은 번호로 맞춘다 — 나란히 놓고 같은 판인지 본다. */
+const VERSION = 'v2.1.7';
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const DRIVE = 'https://www.googleapis.com/drive/v3/';
 const FOLDER = 'application/vnd.google-apps.folder';
@@ -1397,6 +1398,8 @@ const demo = (() => {
 /* ---------------- 시작 ---------------- */
 
 function start() {
+// 머리 막대의 웹 판 — 손으로 적지 않고 VERSION 하나에서 읽는다(폰 꼬리의 버전과 같은 방식).
+if ($('webver')) $('webver').textContent = VERSION;
 if (DEMO) {
   banner('<b>데모</b> — 화면을 보여 주려고 만든 <b>가짜 자료</b>입니다. 실제 자료는 로그인해야 보입니다. <a href="./">데모 끄기</a>', 'demo');
   $('btnLogin').hidden = true;
