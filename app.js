@@ -750,7 +750,7 @@ $('btnLogin').addEventListener('click', () => {
 // 보는 창이 걸친 시간 파일만 드라이브에서 읽고(앞뒤 파일은 미리 읽음), 최근 몇 개만 메모리에 둔다.
 
 // 워치 상태 띠 — events.csv 의 watch_control(«c112f8ad 충전 중»)로 구간을 만든다. 워치가 둘이면 수집 중 > 멈춤 > 충전 > 대기 순으로 한 줄
-const WS_COL = { collecting: '#1E9E50', stopped: '#D98A1C', charging: '#5E6B7A', standby: '#5E6B7A', bad: '#C24A2A' };
+const WS_COL = { collecting: '#1E9E50', stopped: '#D98A1C', charging: '#4A7FB0', standby: '#6B7480', bad: '#C24A2A' };
 const WS_TXT = { collecting: '수집 중', stopped: '멈춤', charging: '충전 중', standby: '대기', bad: '앱 열기 필요' };
 const wsOf = (t) => (/수집/.test(t) ? 'collecting' : /충전/.test(t) ? 'charging' : /멈춤/.test(t) ? 'stopped' : /대기/.test(t) ? 'standby' : /앱 열기|권한/.test(t) ? 'bad' : null);
 function watchSpans() {
@@ -1029,7 +1029,7 @@ function renderSignalShell() {
       <div class="win-stat" id="sigStat"></div>
       <div id="sigChans"><div class="empty mon-empty">파일을 읽는 중…</div></div>
       <div class="readout" id="sigRead">그래프를 끌면 시간이 이어서 움직입니다 · 올리면 그 샘플 값과 아래 원본 줄이 표시됩니다 <span id="sigStatus"></span></div>
-      <div class="legend"><span><i class="sw" style="background:${chanColor('green')}"></i>측정 값</span><span><i class="sw" style="background:var(--mon-bad)"></i>센서 상태 −1</span><span><i class="sw" style="background:#FF4747"></i>누락 구간(25 Hz 1초 · 1 Hz 2.5초 넘게)</span><span><i class="sw" style="background:#E6EDF3;border-radius:50%"></i>다른 이슈(폰 로그)</span><span><i class="sw" style="background:#5E6B7A"></i>워치 대기(충전 포함)</span><span><i class="sw" style="background:#D98A1C"></i>멈춤</span><span><i class="sw" style="background:#E6EDF3;transform:rotate(45deg);border-radius:1px"></i>교체</span><span><i class="sw" style="background:var(--mon-alarm)"></i>끊긴 구간(워치-폰)</span><span><i class="sw" style="background:transparent;border-color:var(--mon-win)"></i>지금 보는 창</span></div>
+      <div class="legend"><span><i class="sw" style="background:${chanColor('green')}"></i>측정 값</span><span><i class="sw" style="background:var(--mon-bad)"></i>센서 상태 −1</span><span><i class="sw" style="background:#FF4747"></i>누락 구간(25 Hz 1초 · 1 Hz 2.5초 넘게)</span><span><i class="sw" style="background:#E6EDF3;border-radius:50%"></i>다른 이슈(폰 로그)</span><span><i class="sw" style="background:#4A7FB0"></i>워치 충전 중</span><span><i class="sw" style="background:#6B7480"></i>대기</span><span><i class="sw" style="background:#D98A1C"></i>멈춤</span><span><i class="sw" style="background:#E6EDF3;transform:rotate(45deg);border-radius:1px"></i>교체</span><span><i class="sw" style="background:var(--mon-alarm)"></i>끊긴 구간(워치-폰)</span><span><i class="sw" style="background:transparent;border-color:var(--mon-win)"></i>지금 보는 창</span></div>
     </div>
     <h3 class="sub-h raw-h">원본 값</h3>
     <div class="tw rawtw" id="rawBox"><table class="raw"><thead id="rawHead"></thead><tbody id="sigRows"></tbody></table></div>`;
@@ -1170,7 +1170,7 @@ function drawOverview() {
     x.fillRect(x0 + 0.5, BAR_T + BAR_H - hh, x1 - x0 - 1, hh);
   });
   // 워치 상태 — 워치가 알린 수집 중 · 충전 중 · 대기 · 멈춤 (폰 2.1.9부터 events.csv에)
-  x.fillStyle = cssv('--mon-dim'); x.fillText(`워치 상태(대기 · 멈춤 · 교체)${(sig.wstate || []).length || (sig.swaps || []).length ? '' : ' · 기록 없음(폰 2.1.9부터)'}`, 2, WS_Y - 4);
+  x.fillStyle = cssv('--mon-dim'); x.fillText('워치 상태(충전 중 · 대기 · 멈춤 · 교체)', 2, WS_Y - 4);
   x.fillStyle = cssv('--mon-grid2'); x.fillRect(0, WS_Y, w, 10);
   (sig.wstate || []).forEach(([a, b, st]) => { if (st === 'collecting' || !(b > T0 && a < T1)) return; x.fillStyle = WS_COL[st]; x.fillRect(X(Math.max(a, T0)), WS_Y, Math.max(2, X(Math.min(b, T1)) - X(Math.max(a, T0))), 10); });
   (sig.swaps || []).forEach((e) => { if (e.ms < T0 || e.ms > T1) return; const px = X(e.ms); x.fillStyle = '#E6EDF3'; x.strokeStyle = '#000'; x.lineWidth = 1; x.beginPath(); x.moveTo(px, WS_Y - 1); x.lineTo(px + 4, WS_Y + 5); x.lineTo(px, WS_Y + 11); x.lineTo(px - 4, WS_Y + 5); x.closePath(); x.fill(); x.stroke(); });
@@ -1182,7 +1182,7 @@ function drawOverview() {
     const lb = (eA - sA) >= 60e3 ? `${Math.round((eA - sA) / 60e3)}분` : `${Math.round((eA - sA) / 1000)}초`;
     if (b - a > x.measureText(lb).width + 8) { x.fillStyle = '#fff'; x.fillText(lb, a + 4, AL_Y + 11); } });
   // 누락 구간(데이터) — 빨강 = 샘플 빈틈 · 노랑 = 센서 −1. 안 읽은 파일은 빗금. 다른 이슈(폰 로그)는 점
-  const lanes = gapLanes(T0, T1), lbl = `누락 구간(데이터)${lanes.todo ? ` · 확인 중 ${lanes.done}/${lanes.done + lanes.todo}` : ''}`;
+  const lanes = gapLanes(T0, T1), lbl = '누락 구간(데이터)';
   x.fillStyle = cssv('--mon-dim'); x.fillText(lbl, 2, IS_Y - 4);
   x.fillStyle = cssv('--mon-grid2'); x.fillRect(0, IS_Y, w, 10);
   lanes.unread.forEach(([a, b]) => { x.fillStyle = 'rgba(255,255,255,.06)'; x.fillRect(X(a), IS_Y, Math.max(1, X(b) - X(a)), 10); });
