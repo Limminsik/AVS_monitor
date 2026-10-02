@@ -1029,7 +1029,7 @@ function renderSignalShell() {
       <div class="win-stat" id="sigStat"></div>
       <div id="sigChans"><div class="empty mon-empty">파일을 읽는 중…</div></div>
       <div class="readout" id="sigRead">그래프를 끌면 시간이 이어서 움직입니다 · 올리면 그 샘플 값과 아래 원본 줄이 표시됩니다 <span id="sigStatus"></span></div>
-      <div class="legend"><span><i class="sw" style="background:${chanColor('green')}"></i>측정 값</span><span><i class="sw" style="background:var(--mon-bad)"></i>센서 상태 −1</span><span><i class="sw" style="background:#FF4747"></i>누락 구간(25 Hz 1초 · 1 Hz 2.5초 넘게)</span><span><i class="sw" style="background:#E6EDF3;border-radius:50%"></i>다른 이슈(폰 로그)</span><span><i class="sw" style="background:#4A7FB0"></i>워치 충전 중</span><span><i class="sw" style="background:#6B7480"></i>대기</span><span><i class="sw" style="background:#D98A1C"></i>멈춤</span><span><i class="sw" style="background:#E6EDF3;transform:rotate(45deg);border-radius:1px"></i>교체</span><span><i class="sw" style="background:var(--mon-alarm)"></i>끊긴 구간(워치-폰)</span><span><i class="sw" style="background:transparent;border-color:var(--mon-win)"></i>지금 보는 창</span></div>
+      <div class="legend"><span><i class="sw" style="background:${chanColor('green')}"></i>측정 값</span><span><i class="sw" style="background:var(--mon-bad)"></i>센서 상태 −1</span><span><i class="sw" style="background:#FF4747"></i>누락 구간(25 Hz 1초 · 1 Hz 2.5초 넘게)</span><span><i class="sw" style="background:#4A7FB0"></i>워치 충전 중</span><span><i class="sw" style="background:#6B7480"></i>대기</span><span><i class="sw" style="background:#D98A1C"></i>멈춤</span><span><i class="sw" style="background:#E6EDF3;transform:rotate(45deg);border-radius:1px"></i>교체</span><span><i class="sw" style="background:var(--mon-alarm)"></i>끊긴 구간(워치-폰)</span><span><i class="sw" style="background:transparent;border-color:var(--mon-win)"></i>지금 보는 창</span></div>
     </div>
     <h3 class="sub-h raw-h">원본 값</h3>
     <div class="tw rawtw" id="rawBox"><table class="raw"><thead id="rawHead"></thead><tbody id="sigRows"></tbody></table></div>`;
@@ -1181,15 +1181,13 @@ function drawOverview() {
     x.fillStyle = cssv('--mon-alarm'); x.fillRect(a, AL_Y, Math.max(2, b - a), 14);
     const lb = (eA - sA) >= 60e3 ? `${Math.round((eA - sA) / 60e3)}분` : `${Math.round((eA - sA) / 1000)}초`;
     if (b - a > x.measureText(lb).width + 8) { x.fillStyle = '#fff'; x.fillText(lb, a + 4, AL_Y + 11); } });
-  // 누락 구간(데이터) — 빨강 = 샘플 빈틈 · 노랑 = 센서 −1. 안 읽은 파일은 빗금. 다른 이슈(폰 로그)는 점
+  // 누락 구간(데이터) — 빨강 = 샘플 빈틈 · 노랑 = 센서 −1. 안 읽은 파일은 옅게
   const lanes = gapLanes(T0, T1), lbl = '누락 구간(데이터)';
   x.fillStyle = cssv('--mon-dim'); x.fillText(lbl, 2, IS_Y - 4);
   x.fillStyle = cssv('--mon-grid2'); x.fillRect(0, IS_Y, w, 10);
   lanes.unread.forEach(([a, b]) => { x.fillStyle = 'rgba(255,255,255,.06)'; x.fillRect(X(a), IS_Y, Math.max(1, X(b) - X(a)), 10); });
   lanes.bad.forEach(([a, b]) => { x.fillStyle = '#FFB300'; x.fillRect(X(a), IS_Y, Math.max(2, X(b) - X(a)), 10); });
   lanes.gaps.forEach(([a, b]) => { x.fillStyle = '#FF4747'; x.fillRect(X(a), IS_Y, Math.max(2, X(b) - X(a)), 10); });
-  sig.issues.forEach((e) => { if (e.ms < T0 || e.ms > T1) return; x.fillStyle = '#E6EDF3'; x.strokeStyle = '#000'; x.lineWidth = 1;
-    x.beginPath(); x.arc(X(e.ms), IS_Y + 5, 3, 0, 7); x.fill(); x.stroke(); });
   // 지금 보는 창
   const ws = X(sig.view.t), we = X(sig.view.t + sig.view.len * 1000);
   x.fillStyle = 'rgba(90,200,250,.18)'; x.fillRect(ws, BAR_T, Math.max(3, we - ws), h - BAR_T);
