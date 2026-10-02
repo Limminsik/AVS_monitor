@@ -1,7 +1,7 @@
 'use strict';
 /* AVS 모니터링 — 드라이브의 상태·요약 파일을 읽어 그린다. 자료는 메모리에만 둔다. */
 
-const CFG = Object.assign({ clientId: '', rootFolderName: 'AVS_raw', refreshMinutes: 5 }, window.AVS_CONFIG || {});
+const CFG = Object.assign({ clientId: '', rootFolderName: 'AVS_raw', refreshMinutes: 5, fastSeconds: 15, ackPollSeconds: 20, ackWarnMinutes: 2 }, window.AVS_CONFIG || {});
 const VERSION = 'monitor 0.1';
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const DRIVE = 'https://www.googleapis.com/drive/v3/';
@@ -79,6 +79,13 @@ async function listAll(q, fields = 'id,name,parents,modifiedTime,mimeType') {
 }
 
 const fileText = (id) => api(`files/${id}`, { alt: 'media' }, true);
+// 같은 파일이 바뀌지 않았으면(수정 시각 같음) 다시 받지 않는다 — 새로 읽기를 가볍게
+const textCache = new Map();
+async function cachedText(f) {
+  const m = f.modifiedTime || '', c = textCache.get(f.id);
+  if (m && c && c.m === m) return c.t;
+  const t = await fileText(f.id); textCache.set(f.id, { m, t }); return t;
+}
 // 시간 파일의 첫 줄(헤더)만 — 앞 4KB만 받아 폰 번호·앱 버전·워치 번호를 읽는다
 async function fileHead(id) {
   if (Date.now() > state.tokenExp) await requestToken('');
@@ -123,13 +130,39 @@ function parseCsv(text) {
 
 /* ---------------- 읽기 ---------------- */
 
+// 폰 폴더가 둘이면 같은 이름 파일 중 가장 최근 것
+function keepNewest(d, f) { const o = d.files[f.name]; if (!o || String(f.modifiedTime || '') > String(o.modifiedTime || '')) d.files[f.name] = f; }
+// 명령은 폰이 읽는 폴더에 써야 한다 — 처리 결과(ack)나 command.json이 있는 폴더, 없으면 status.json이 있는 폴더
+function pickFolder(d) { const f = d.files['command_ack.json'] || d.files['command.json'] || d.files['status.json']; d.folderId = (f && (f.parents || [])[0]) || d.folderIds[0]; d.split = d.folderIds.length > 1; }
+// v2 — 설정한 루트(AVS_raw_v2) 아래 것만 읽는다(지금 판 AVS_raw와 섞이지 않게)
+const childFolders = (parentId, name) => listAll(`'${parentId}' in parents and mimeType='${FOLDER}' and trashed=false${name ? ` and name='${name}'` : ''}`, 'id,name,createdTime');
 async function loadDrive() {
-  const roots = await listAll(`name='${CFG.rootFolderName}' and mimeType='${FOLDER}' and trashed=false`);
+  const roots = await listAll(`name='${CFG.rootFolderName}' and mimeType='${FOLDER}' and trashed=false`, 'id,name');
   if (!roots.length) throw new Error('NO_ROOT');
-  const statusFiles = await listAll(`name='status.json' and trashed=false`);
-  const subjectFiles = await listAll(`name='subject.json' and trashed=false`);
-  const phones = (await pool(statusFiles, 6, async (f) => JSON.parse(await fileText(f.id)))).filter(Boolean);
-  const subjects = (await pool(subjectFiles, 6, async (f) => ({ info: JSON.parse(await fileText(f.id)), folderId: (f.parents || [])[0] }))).filter(Boolean);
+  // 이름이 같은 루트가 여럿이면 subjects나 _system이 있는 것
+  let root = roots[0];
+  if (roots.length > 1) for (const r of roots) { if ((await childFolders(r.id)).some((c) => c.name === 'subjects' || c.name === '_system')) { root = r; break; } }
+  state.rootId = root.id;
+  const top = await childFolders(root.id);
+  // 같은 이름 폴더가 둘 생겼을 수 있다(폰이 동시에 만듦) — 모두 모은다
+  const subjDirs = top.filter((c) => c.name === 'subjects'), sysDirs = top.filter((c) => c.name === '_system');
+  const subjFolders = (await Promise.all(subjDirs.map((d) => childFolders(d.id)))).flat();
+  const phonesDirs = (await Promise.all(sysDirs.map((d) => childFolders(d.id, 'phones')))).flat();
+  const phoneFolders = (await Promise.all(phonesDirs.map((d) => childFolders(d.id)))).flat();
+  const subjIds = new Set(subjFolders.map((f) => f.id));
+  const [subjectFiles, phoneFiles] = await Promise.all([
+    listAll(`name='subject.json' and trashed=false`),
+    phoneFolders.length ? listAll(`(name='status.json' or name='command.json' or name='command_ack.json') and trashed=false`) : [],
+  ]);
+  // 폰 폴더 이름(폰 id)마다 — 폴더가 여럿이면 다 묶고, 파일은 가장 최근 것을 쓴다
+  state.phoneDirs = new Map();
+  phoneFolders.forEach((f) => { const d = state.phoneDirs.get(f.name) || { folderIds: [], createdTime: f.createdTime, files: {} }; d.folderIds.push(f.id); if (f.createdTime < d.createdTime) d.createdTime = f.createdTime; state.phoneDirs.set(f.name, d); });
+  const owner = new Map(phoneFolders.map((f) => [f.id, f.name]));
+  phoneFiles.forEach((f) => { const pid = owner.get((f.parents || [])[0]); if (pid) keepNewest(state.phoneDirs.get(pid), f); });
+  state.phoneDirs.forEach(pickFolder);
+  const phones = (await pool([...state.phoneDirs.entries()].filter(([, d]) => d.files['status.json']), 6, async ([pid, d]) => ({ ...JSON.parse(await cachedText(d.files['status.json'])), _dir: pid }))).filter(Boolean);
+  await pool([...state.phoneDirs.values()].filter((d) => d.files['command_ack.json']), 6, async (d) => { d.ack = JSON.parse(await cachedText(d.files['command_ack.json'])); });
+  const subjects = (await pool(subjectFiles.filter((f) => subjIds.has((f.parents || [])[0])), 6, async (f) => ({ info: JSON.parse(await cachedText(f)), folderId: (f.parents || [])[0] }))).filter(Boolean);
   return { phones, subjects };
 }
 
@@ -142,7 +175,7 @@ async function loadDates(subject) {
 async function loadDay(dateFolder) {
   if (DEMO) return demo.day(dateFolder);
   const files = await listAll(`'${dateFolder.id}' in parents and trashed=false`, 'id,name,size,modifiedTime');
-  const get = async (name) => { const f = files.find((x) => x.name === name); return f ? parseCsv(await fileText(f.id)) : []; };
+  const get = async (name) => { const f = files.find((x) => x.name === name); return f ? parseCsv(await cachedText(f)) : []; };
   const [manifest, events] = await Promise.all([get('manifest.csv'), get('events.csv')]);
   const mf = files.find((x) => x.name === 'manifest.csv');
   return { manifest, events, manifestAt: mf && mf.modifiedTime ? Date.parse(mf.modifiedTime) : 0, files: files.filter((f) => f.name.endsWith('.ndjson')) };
@@ -159,6 +192,7 @@ async function refresh() {
       banner('로그인은 됐지만 보이는 파일이 없습니다. 앱이 만든 파일만 보는 권한(drive.file)이라, 이 웹 클라이언트가 폰 앱과 <b>같은 구글 클라우드 프로젝트</b>에 있어야 합니다.', 'bad');
     } else if (!DEMO) banner('', '');
     renderCohort();
+    renderCtl();
     renderProgress();
     fillSubjectPicker();
     // 대상자는 고를 때만 읽는다(처음엔 아무것도 읽지 않아 가볍게)
@@ -397,6 +431,275 @@ function renderEvents() {
   $('events').innerHTML = html;
 }
 
+
+/* ---------------- 대상자 관리 (v2) — 웹 → 드라이브 command.json → 폰(3분) → 워치 ---------------- */
+
+const ID_RULE = /^[A-Za-z0-9_-]{1,32}$/;
+const WSTATE = { collecting: ['ok', '수집 중'], charging: ['off', '충전 중 · 수집 안 함'], off_wrist: ['off', '미착용 · 수집 안 함'], stopped: ['warn', '멈춤(워치에서)'], standby: ['off', '대기'], needs_open: ['bad', '앱 열기 필요'], no_permission: ['bad', '권한 없음'] };
+const ctl = { open: null, pending: new Map(), timer: null, poll: null };   // pending: 폰 → {seq, cmd, at}
+
+function phoneDir(pid) { return (state.phoneDirs && state.phoneDirs.get(pid)) || null; }
+function ackOf(pid) { const d = phoneDir(pid); return d && d.ack; }
+
+// 명령 하나의 상태 — 보냄(대기) · 반영됨 · 거절 · 오래 대기
+function cmdState(pid) {
+  const p = ctl.pending.get(pid), a = ackOf(pid), now = Date.now();
+  if (p && (!a || a.seq < p.seq)) {
+    const min = Math.floor((now - p.at) / 60e3);
+    return min >= CFG.ackWarnMinutes ? ['bad', `반영 안 됨 · ${min}분 — 폰·망 확인`] : ['wait', `보냄 · 폰 확인 대기${min ? ` ${min}분` : ''}`];
+  }
+  if (!a) return ['', '—'];
+  const t = `${kstHM(a.applied_at)} ${({ start: '시작', end: '종료', rename: '번호 고침', sync_now: '지금 보내기' })[a.action] || ''}`;
+  return a.result === 'ok' ? ['ok', `반영됨 ${t}`] : ['bad', `${a.result === 'rejected' ? '거절' : '실패'} ${t} — ${a.reason || ''}`];
+}
+
+// 폰 첫 화면 — 폰이 status.json 의 home 칸에 그대로 적어 보낸다(Z-3). 옛 앱이면 다른 칸으로 비슷하게
+function homeOf(p, now) {
+  if (p.home && p.home.lines) return p.home;
+  const w = p.last_sample_at && now - p.last_sample_at <= 10e3 ? ['ok', `받는 중 · ${ago(p.last_sample_at, now)}`] : p.last_sample_at ? ['bad', `안 옵니다 · ${ago(p.last_sample_at, now)}`] : ['bad', '아직 받은 것이 없습니다'];
+  return { subject: { title: p.subject_id || '연구번호 없음', missing: !p.subject_id, note: '', goal: '' },
+    lines: [{ label: '워치', text: w[1] + (p.watch_device_id ? ' · ' + String(p.watch_device_id).slice(0, 8) : ''), tone: w[0] },
+      { label: '드라이브', text: p.drive_last_ok_at ? `올림 · ${ago(p.drive_last_ok_at, now)} · 밀린 것 ${p.drive_pending_files || 0}` : '아직 올린 것이 없습니다', tone: p.google_connected === false ? 'wait' : 'ok' }], remote_note: '' };
+}
+
+// 오른쪽 메뉴 MONITOR 1 · 2 … — 누르면 그 폰의 화면이 열리고, 다시 누르면 닫힌다(여럿 열 수 있음)
+function phoneList() {
+  const dirs = state.phoneDirs ? [...state.phoneDirs.entries()] : [];
+  return dirs.sort((x, y) => String(x[1].createdTime || x[0]).localeCompare(String(y[1].createdTime || y[0]))).map(([pid]) => pid);
+}
+function renderCtl() {
+  const list = phoneList(), now = Date.now();
+  if (!ctl.drawers) ctl.drawers = new Set();
+  const rail = $('rail'); rail.hidden = false; document.body.classList.add('has-rail');
+  rail.innerHTML = '<div class="rail-h">폰 화면</div>' + (list.length ? list.map((pid, i) => {
+    const p = state.phones.find((x) => x._dir === pid) || {}, stale = !p.at || now - p.at > 3 * 60e3, tone = (homeOf(p, now).lines || []).some((l) => l.tone === 'bad') ? 'bad' : stale ? 'warn' : 'ok';
+    return `<button class="rail-b${ctl.drawers.has(pid) ? ' on' : ''}" data-pid="${esc(pid)}" title="${esc(pid)}"><i class="dot ${tone}"></i><b>MONITOR ${i + 1}</b><span>${esc(pid.slice(0, 8))}</span><span>${esc(currentSubject(pid) || '연구번호 없음')}</span></button>`;
+  }).join('') : '<div class="rail-e">v2 폰이 아직 없습니다</div>');
+  rail.querySelectorAll('.rail-b').forEach((b) => (b.onclick = () => { const pid = b.dataset.pid; ctl.drawers.has(pid) ? ctl.drawers.delete(pid) : ctl.drawers.add(pid); renderCtl(); }));
+  [...ctl.drawers].forEach((pid) => { if (!list.includes(pid)) ctl.drawers.delete(pid); });
+  $('drawers').innerHTML = [...ctl.drawers].map((pid) => drawerHtml(pid, list.indexOf(pid) + 1, now)).join('');
+  document.querySelectorAll('#drawers .drawer').forEach((dw) => {
+    const pid = dw.dataset.pid;
+    dw.querySelector('.dw-x').onclick = () => { ctl.drawers.delete(pid); renderCtl(); };
+    dw.querySelectorAll('[data-act]').forEach((b) => (b.onclick = () => {
+      if (b.dataset.act === 'sync') { if (isPending(pid)) { alertLine(pid, '앞 명령이 아직 반영되지 않았습니다 — 반영된 뒤 보내세요'); return; } b.disabled = true; sendCommand(pid, { action: 'sync_now' }).then(() => { renderCtl(); watchAcks(); }).catch((e) => { b.disabled = false; alertLine(pid, '보내기 실패 — ' + e.message); }); return; }
+      openForm(pid, b.dataset.act);
+    }));
+  });
+  document.querySelectorAll('#drawers details.diag').forEach((dt) => { const pid = dt.closest('.drawer').dataset.pid; if (ctl.diagOpen && ctl.diagOpen.has(pid)) { dt.open = true; diag(pid, dt.querySelector('.diag-b')); }
+    dt.addEventListener('toggle', () => { ctl.diagOpen = ctl.diagOpen || new Set(); if (dt.open) { ctl.diagOpen.add(pid); diag(pid, dt.querySelector('.diag-b')); } else ctl.diagOpen.delete(pid); }); });
+  if (ctl.open && ctl.drawers.has(ctl.open.pid)) openForm(ctl.open.pid, ctl.open.act, true);
+}
+
+// 워치마다 한 줄(A59) — 폰이 status.json 의 watches 로 올린 것을 그대로. 없으면(2.1.6 이하) 옛 한 줄
+const WTONE = { ok: 'ok', wait: 'off', warn: 'warn', bad: 'bad' };
+function watchRows(p, w, ws) {
+  const list = Array.isArray(p.watches) ? p.watches.filter((x) => x && x.id) : [];
+  if (!list.length) return `<div><span class="k">워치</span> ${w.state ? `<span class="pill ${ws[0]}">${ws[1]}</span>` : '<span class="muted">—</span>'} <span class="id">${esc(String(w.id || p.watch_device_id || '').slice(0, 8))}${w.at ? ' · ' + kstHM(w.at) : ''}</span></div>`;
+  return list.map((x) => {
+    const st = WSTATE[x.state] || ['', x.state ? esc(x.state) : '—'];
+    const tone = WTONE[x.tone] || st[0];
+    const text = x.line ? String(x.line).replace(/\s*·\s*[0-9a-f]{8}$/i, '') : st[1];
+    return `<div><span class="k">워치</span> <span class="pill ${tone}" title="${esc(x.reason || '')}">${esc(text)}</span> <span class="id">${esc(String(x.id).slice(0, 8))}${x.connected === false ? ' · 끊김' : ''}${x.state_at ? ' · ' + kstHM(x.state_at) : ''}</span></div>`;
+  }).join('');
+}
+function drawerHtml(pid, n, now) {
+  const p = state.phones.find((x) => x._dir === pid) || {}, a = ackOf(pid) || {}, w = a.watch && (a.watch.at || 0) > ((p.watch_control || {}).at || 0) ? a.watch : (p.watch_control || {});
+  const sub = currentSubject(pid), h = JSON.parse(JSON.stringify(homeOf(p, now))), ws = WSTATE[w.state] || ['', w.state ? esc(w.state) : '—'], cs = cmdState(pid), stale = p.at ? now - p.at : Infinity;
+  // 폰이 명령을 처리한 결과(ack)가 폰 화면 파일(status.json)보다 새것이면 연구번호는 결과를 따른다 — 폰 화면 파일은 1분 뒤에 따라온다
+  const ackNewer = a.applied_at && a.applied_at > (p.at || 0) && a.result === 'ok' && a.action !== 'sync_now';
+  if (ackNewer && h.subject && (h.subject.title !== (sub || '연구번호 없음'))) h.subject = sub ? { title: sub, note: '폰 화면 갱신 대기 · 명령은 반영됨', goal: '', missing: false } : { title: '연구번호 없음', missing: true, note: '폰 화면 갱신 대기 · 명령은 반영됨' };
+  const lines = (h.lines || []).map((l) => `<div class="pl"><i class="dot ${esc(l.tone)}"></i><b>${esc(l.label)}</b><span>${esc(l.text)}</span></div>`).join('');
+  return `<section class="drawer" data-pid="${esc(pid)}">
+    <div class="dw-h"><b>MONITOR ${n}</b><span class="muted">${esc(pid.slice(0, 8))} · ${esc(p.app_version || '')}</span><button class="dw-x" title="닫기">✕</button></div>
+    <div class="phone">
+      <div class="phead"><span class="ph-brand"><img src="assets/daclab-mark.png" alt="" width="14" height="15">AVS 모니터링</span><span class="ph-id">${esc(pid.slice(0, 8))}</span></div>
+      <div class="pbar"><span>폰 화면</span><span class="${stale > 3 * 60e3 ? 'old' : ''}">${p.at ? kstHM(p.at) + ' · ' + ago(p.at, now) : '상태 없음'}</span></div>
+      <div class="psub ${h.subject && h.subject.missing ? 'none' : ''}"><div class="pl1">연구번호</div><div class="pt">${esc(h.subject ? h.subject.title : '—')}</div>
+        <div class="pn">${esc([h.subject && h.subject.note, h.subject && h.subject.goal].filter(Boolean).join(' · '))}</div>
+        ${h.subject && h.subject.progress ? `<div class="pprog"><b style="width:${Math.min(100, h.subject.progress * 100)}%"></b></div>` : ''}</div>
+      <div class="plines">${lines}</div>
+      ${h.remote_note ? `<div class="premote">${esc(h.remote_note)}</div>` : ''}
+      <div class="pbtns"><button class="btn sm" data-act="start">시작</button><button class="btn ghost sm" data-act="rename"${sub ? '' : ' disabled'}>번호 고치기</button><button class="btn danger sm" data-act="end"${sub ? '' : ' disabled'}>종료</button><button class="btn ghost sm" data-act="sync">지금 보내기</button></div>
+      <div class="pfoot"><img class="pf-logo" src="assets/daclab-logo.png" alt="DAC LAB" width="53" height="16"><span class="pf-lic">© 2026 Minsik Lim. All rights reserved.${p.app_version ? ' · v' + esc(p.app_version) : ''}</span><span class="pf-pt"><img src="assets/gil-logo.png" alt="가천대 길병원" width="76" height="16"><img src="assets/gachon-logo.png" alt="가천대학교" width="66" height="16"></span></div>
+    </div>
+    <div class="dw-info">
+      ${watchRows(p, w, ws)}
+      <div><span class="k">명령</span> <span class="cmdst ${cs[0]}">${esc(cs[1])}</span></div>
+      ${stale > 3 * 60e3 && p.at ? `<div class="warnline">폰 화면이 ${ago(p.at, now)} 것입니다 — 폰·망을 확인하세요</div>` : ''}
+      ${!p.at ? '<div class="warnline">폰 상태 파일(status.json)을 아직 못 찾았습니다</div>' : ''}
+      ${(phoneDir(pid) || {}).split ? `<div class="warnline">이 폰 폴더가 드라이브에 ${(phoneDir(pid) || {}).folderIds.length}개 있습니다 — 모두 읽습니다</div>` : ''}
+      <div class="muted small">화면은 15초마다 새로 봄(폰은 1분마다 올림) · 명령은 폰이 15초마다 읽습니다</div>
+    </div>
+    <div class="dform"></div>
+    <details class="diag"><summary>로그</summary><div class="diag-b" data-diag="${esc(pid)}">여는 중…</div></details>
+  </section>`;
+}
+const formBox = (pid) => document.querySelector(`#drawers .drawer[data-pid="${CSS.escape(pid)}"] .dform`);
+const alertLine = (pid, t) => { const f = formBox(pid); if (f) f.innerHTML = `<div class="ctl-form"><div class="msg">${esc(t)}</div></div>`; };
+
+// 빠른 새로 읽기 — 15초마다 폰 폴더의 status.json · command_ack.json 목록(수정 시각)만 한 번에 묻고,
+// 바뀐 파일만 받는다. 폰의 연구번호·워치가 바뀌면 대상자 목록도 곧바로 다시 읽는다(전체는 5분마다)
+function pollPhones(delay) { if (delay !== undefined) fastPoll(delay); }
+function fastPoll(delay = 0) {
+  clearTimeout(ctl.fast);
+  ctl.fast = setTimeout(async () => {
+    try { if (!document.hidden && state.token && !DEMO && state.phoneDirs && state.phoneDirs.size) await fastOnce(); }
+    catch (e) { /* 다음에 */ }
+    finally { fastPoll(CFG.fastSeconds * 1000); }
+  }, delay);
+}
+async function fastOnce() {
+  const all = [...state.phoneDirs.entries()], ids = all.flatMap(([, d]) => d.folderIds || [d.folderId]);
+  const owner = new Map(all.flatMap(([pid, d]) => (d.folderIds || [d.folderId]).map((id) => [id, pid])));
+  const fs = await listAll(`(${ids.map((id) => `'${id}' in parents`).join(' or ')}) and (name='status.json' or name='command_ack.json' or name='command.json') and trashed=false`, 'id,name,modifiedTime,parents');
+  const before = new Map(state.phones.map((p) => [p._dir, `${p.subject_id}|${p.watch_device_id}|${p.at}`]));
+  all.forEach(([, d]) => { d.files = {}; });
+  fs.forEach((f) => { const pid = owner.get((f.parents || [])[0]); if (pid) keepNewest(state.phoneDirs.get(pid), f); });
+  let subjChanged = false;
+  await pool(all, 4, async ([pid, d]) => {
+    if (d.folderIds) pickFolder(d);
+    if (d.files['status.json']) {
+      const st = { ...JSON.parse(await cachedText(d.files['status.json'])), _dir: pid }, i = state.phones.findIndex((x) => x._dir === pid);
+      const old = i >= 0 ? state.phones[i] : null;
+      if (!old || old.subject_id !== st.subject_id) subjChanged = true;
+      if (i >= 0) state.phones[i] = st; else state.phones.push(st);
+    }
+    if (d.files['command_ack.json']) d.ack = JSON.parse(await cachedText(d.files['command_ack.json']));
+  });
+  const changed = state.phones.some((p) => before.get(p._dir) !== `${p.subject_id}|${p.watch_device_id}|${p.at}`);
+  if (subjChanged || state.phones.some((p) => p.subject_id && !state.subjects.some((x) => x.info.subject_id === p.subject_id))) quickRefresh();
+  else if (changed) { renderCtl(); renderCohort(); }
+}
+// 연구번호가 바뀌었을 때 — 대상자 목록(subject.json)까지 다시 읽되 겹치지 않게(바뀐 파일만 받으므로 가벼움)
+let quickT = null;
+function quickRefresh() { clearTimeout(quickT); quickT = setTimeout(() => refresh(), 1500); }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state.token && !DEMO) fastPoll(0); });
+
+function currentSubject(pid) {
+  const p = state.phones.find((x) => x._dir === pid) || {}, a = ackOf(pid) || {};
+  return a.subject_id_now !== undefined && (a.applied_at || 0) > (p.at || 0) ? a.subject_id_now : p.subject_id;
+}
+
+// 로그 — 명령 기록. 맨 위는 지금 명령·결과(드라이브의 command.json · command_ack.json, 바로 보임),
+// 그 아래는 폰 기록(_system/phones/<폰>/logs/<날짜>.ndjson — 올리기 회차에 올라오므로 몇 분 늦을 수 있음)
+const LOG_CODES = /원격|대상자 시작|대상자 종료|연구번호|지금 보내기|가져/;
+const ACT = { start: '시작', end: '종료', rename: '번호 고침', sync_now: '지금 보내기' };
+async function diag(pid, box) {
+  const d = phoneDir(pid); if (!d) { box.textContent = '폰 폴더 없음'; return; }
+  const rows = [];
+  const pe = ctl.pending.get(pid), a = d.ack;
+  if (pe && (!a || a.seq < pe.seq)) rows.push([pe.at, '보냄', `${ACT[pe.cmd.action] || pe.cmd.action} ${pe.cmd.subject_id || ''}${pe.cmd.rename_to ? ' → ' + pe.cmd.rename_to : ''} · 폰 확인 대기`]);
+  if (a && a.applied_at) rows.push([a.applied_at, a.result === 'ok' ? '반영됨' : a.result === 'rejected' ? '거절' : '실패', `${ACT[a.action] || a.action} ${a.subject_id_now || ''}${a.reason ? ' · ' + a.reason : ''}`]);
+  if (!DEMO) {
+    try {
+      for (const id of (d.folderIds || [d.folderId])) {
+        const logDir = (await listAll(`'${id}' in parents and name='logs' and mimeType='${FOLDER}' and trashed=false`, 'id'))[0];
+        if (!logDir) continue;
+        const fs = (await listAll(`'${logDir.id}' in parents and trashed=false`, 'id,name')).sort((x, y) => y.name.localeCompare(x.name)).slice(0, 2);
+        for (const f of fs) (await fileText(f.id)).split('\n').forEach((ln) => { try { const e = JSON.parse(ln); if (LOG_CODES.test(e.code || '')) rows.push([e.at, e.code, String(e.detail || '')]); } catch (err) { /* 빈 줄 */ } });
+      }
+    } catch (e) { rows.push([Date.now(), '로그 읽기 실패', e.message]); }
+  }
+  const seen = new Set();
+  const list = rows.filter((r) => { const k = r[0] + r[1] + r[2]; if (seen.has(k)) return false; seen.add(k); return true; }).sort((x, y) => y[0] - x[0]).slice(0, 60);
+  box.innerHTML = list.length ? '<table class="loglist">' + list.map(([t, c, x]) => `<tr><td>${kstDate(t).slice(5)} ${kstFull(t).slice(0, 5)}</td><td><b>${esc(c)}</b></td><td>${esc(x)}</td></tr>`).join('') + '</table><div class="muted small">폰 기록은 올리기 회차(15분 · 지금 보내기)에 맞춰 늦게 보일 수 있습니다</div>' : '<span class="muted">아직 명령 기록이 없습니다</span>';
+}
+function isPending(pid) { const p = ctl.pending.get(pid), a = ackOf(pid); return !!p && (!a || a.seq < p.seq); }
+function openForm(pid, act, keep) {
+  if (isPending(pid)) { alertLine(pid, '앞 명령이 아직 반영되지 않았습니다 — 반영된 뒤 보내세요(명령은 하나씩 갑니다)'); return; }
+  ctl.open = { pid, act };
+  const cur = currentSubject(pid), box = formBox(pid); if (!box) return;
+  const what = act === 'start' ? `폰 <b>${esc(pid.slice(0, 8))}</b>에서 새 연구번호로 수집을 시작합니다${cur ? ` — 지금 <b>${esc(cur)}</b>는 종료됩니다` : ''}. 폰이 명령을 읽는 대로(15초 안팎) 그때부터 받는 자료가 이 번호로 갑니다. 워치는 착용 중이면 계속 수집합니다.`
+    : act === 'end' ? `폰 <b>${esc(pid.slice(0, 8))}</b>의 <b>${esc(cur)}</b> 수집을 종료합니다. 그 뒤 받는 자료는 연구번호 없이(<code>_unassigned</code>) 쌓입니다. 확인으로 연구번호를 한 번 더 넣으세요.`
+    : `<b>${esc(cur)}</b>의 연구번호를 고칩니다. 드라이브 폴더와 파일 머리의 번호가 바뀌고, 자료는 지우지 않습니다.`;
+  if (keep && box.dataset.k === pid + act) return;
+  box.dataset.k = pid + act;
+  box.innerHTML = `<div class="ctl-form"><div class="what">${what}</div>
+    <label>${act === 'end' ? '연구번호 확인' : act === 'rename' ? '새 연구번호' : '연구번호'}<input id="cf1" autocomplete="off" spellcheck="false"></label>
+    ${act === 'end' ? '' : '<label>한 번 더<input id="cf2" autocomplete="off" spellcheck="false"></label>'}
+    <button class="btn" id="cfGo">${act === 'start' ? '시작 보내기' : act === 'end' ? '종료 보내기' : '고치기 보내기'}</button>
+    <button class="btn ghost" id="cfNo">닫기</button><div class="msg" id="cfMsg"></div></div>`;
+  const q = (id) => box.querySelector('#' + id);
+  q('cfNo').onclick = () => { ctl.open = null; box.innerHTML = ''; box.dataset.k = ''; };
+  q('cfGo').onclick = () => submitForm(pid, act);
+  q('cf1').focus();
+}
+
+async function submitForm(pid, act) {
+  const box = formBox(pid), q = (id) => box.querySelector('#' + id);
+  const v1 = q('cf1').value.trim(), v2 = q('cf2') ? q('cf2').value.trim() : v1, cur = currentSubject(pid), msg = q('cfMsg');
+  const exists = (id) => state.subjects.some((s) => s.info.subject_id === id);
+  let cmd;
+  if (act === 'end') {
+    if (v1 !== cur) { msg.textContent = `지금 연구번호(${cur})와 다릅니다`; return; }
+    cmd = { action: 'end', subject_id: cur };
+  } else {
+    if (!v1) { msg.textContent = '연구번호를 넣으세요'; return; }
+    if (v1 !== v2) { msg.textContent = '두 번 넣은 값이 다릅니다'; return; }
+    if (!ID_RULE.test(v1) || v1 === '_unassigned') { msg.textContent = '영문·숫자·- _ 만, 32자까지'; return; }
+    if (exists(v1) || v1 === cur) { msg.textContent = '이미 있는 연구번호입니다'; return; }
+    cmd = act === 'start' ? { action: 'start', subject_id: v1 } : { action: 'rename', subject_id: cur, rename_to: v1 };
+  }
+  q('cfGo').disabled = true; msg.textContent = '보내는 중…';
+  try {
+    await sendCommand(pid, cmd);
+    ctl.open = null; box.innerHTML = ''; box.dataset.k = '';
+    renderCtl(); watchAcks();
+  } catch (e) { msg.textContent = '보내기 실패 — ' + e.message; q('cfGo').disabled = false; }
+}
+
+// command.json을 같은 파일 id에 덮어쓴다(없으면 만든다). seq는 앞 명령·처리 결과보다 1 크게
+async function sendCommand(pid, body) {
+  const d = phoneDir(pid); if (!d) throw new Error('폰 폴더 없음');
+  let prev = 0;
+  if (d.files['command.json'] && !DEMO) { try { prev = JSON.parse(await fileText(d.files['command.json'].id)).seq || 0; } catch (e) { prev = 0; } }
+  prev = Math.max(prev, (d.ack && d.ack.seq) || 0, (ctl.pending.get(pid) || {}).seq || 0, d.lastSeq || 0);
+  const now = Date.now();
+  const cmd = { format: 'avs-cmd/1', cmd_id: (crypto.randomUUID ? crypto.randomUUID() : String(now) + Math.random().toString(16).slice(2)), seq: prev + 1, issued_at: now, issued_kst: `${kstDate(now)} ${kstFull(now).slice(0, 8)}`, phone_id: pid, ...body };
+  if (DEMO) { demo.command(pid, cmd); }
+  else {
+    const text = JSON.stringify(cmd, null, 1);
+    if (Date.now() > state.tokenExp) await requestToken('');
+    let res;
+    if (d.files['command.json']) {
+      res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${d.files['command.json'].id}?uploadType=media`, { method: 'PATCH', headers: { Authorization: 'Bearer ' + state.token, 'Content-Type': 'application/json' }, body: text });
+    } else {
+      const b = 'avs' + now, meta = JSON.stringify({ name: 'command.json', parents: [d.folderId], mimeType: 'application/json' });
+      res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,parents', { method: 'POST', headers: { Authorization: 'Bearer ' + state.token, 'Content-Type': `multipart/related; boundary=${b}` },
+        body: `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n--${b}\r\nContent-Type: application/json\r\n\r\n${text}\r\n--${b}--` });
+      if (res.ok) { const f = await res.clone().json(); d.files['command.json'] = f; }
+    }
+    if (!res.ok) throw new Error(`드라이브 ${res.status}`);
+  }
+  d.lastSeq = cmd.seq;
+  ctl.pending.set(pid, { seq: cmd.seq, cmd, at: now });
+}
+
+// 보낸 명령이 있으면 처리 결과 파일만 짧게 다시 읽는다(전체 새로고침은 5분 그대로)
+function watchAcks() {
+  clearTimeout(ctl.timer);
+  // 반영된 뒤에도 워치 답(수집 중·대기)이 올 때까지 몇 번 더 읽는다 — 폰은 워치 답을 받으면 결과 파일을 다시 쓴다
+  const waiting = (pid, p) => { const a = ackOf(pid); if (!a || a.seq < p.seq) return true; const w = a.watch || {};
+    if ((w.at || 0) >= (a.applied_at || 0) - 5000 && w.state) return false; p.extra = (p.extra || 0) + 1; return p.extra <= 6; };
+  if (![...ctl.pending.entries()].some(([pid, p]) => waiting(pid, p))) return;
+  ctl.timer = setTimeout(async () => {
+    for (const [pid, p] of ctl.pending) {
+      const d = phoneDir(pid); if (!d) continue;
+      if (d.ack && d.ack.seq >= p.seq && (p.extra || 0) > 6) continue;
+      try {
+        if (DEMO) d.ack = demo.ack(pid) || d.ack;
+        else {
+          if (!d.files['command_ack.json']) { const f = await listAll(`'${d.folderId}' in parents and name='command_ack.json' and trashed=false`); if (f.length) d.files['command_ack.json'] = f[0]; }
+          if (d.files['command_ack.json']) d.ack = JSON.parse(await fileText(d.files['command_ack.json'].id));
+        }
+      } catch (e) { /* 다음에 */ }
+    }
+    if (!DEMO && [...ctl.pending.entries()].some(([pid, p]) => ackOf(pid) && ackOf(pid).seq >= p.seq && !p.refreshed && (p.refreshed = true))) { fastPoll(3000); }
+    renderCtl(); watchAcks();
+  }, (DEMO ? 3 : ([...ctl.pending.values()].some((p) => Date.now() - p.at < 120e3) ? 5 : CFG.ackPollSeconds)) * 1000);   // 보낸 뒤 2분은 5초마다
+}
+
 /* ---------------- 말풍선 ---------------- */
 
 document.addEventListener('mousemove', (ev) => {
@@ -420,7 +723,8 @@ function signedIn() {
   $('btnRefresh').hidden = false;
   refresh();
   clearInterval(state.timer);
-  state.timer = setInterval(refresh, CFG.refreshMinutes * 60e3);
+  state.timer = setInterval(() => { if (!document.hidden) refresh(); }, CFG.refreshMinutes * 60e3);
+  fastPoll(CFG.fastSeconds * 1000);
 }
 
 function signOut() {
@@ -994,6 +1298,7 @@ if (window.ResizeObserver) new ResizeObserver((en) => { const w = Math.round(en[
 
 /* ---------------- 데모 자료 (가짜) ---------------- */
 
+const demoCmd = new Map();
 const demo = (() => {
   let seed = 7;
   const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
@@ -1067,7 +1372,23 @@ const demo = (() => {
   const cacheDay = new Map();
   return {
     raw,
-    all: () => ({ phones, subjects }),
+    all: () => {
+      phones.forEach((p) => { p._dir = p.phone_id.slice(0, 8); p.watch_control = p.subject_id ? { id: p.watch_device_id, state: 'collecting', at: p.at } : { id: 'd3m0e5f6', state: 'standby', at: p.at }; });
+      if (!state.phoneDirs) state.phoneDirs = new Map(phones.map((p) => [p._dir, { folderId: 'pf_' + p._dir, files: {} }]));
+      phones[2].watch_control = { id: 'd3m0e5f6', state: 'charging', at: phones[2].at };
+      phones[0].watches = [{ id: 'd3m0a1b2', state: 'collecting', state_at: phones[0].at, last_sample_at: phones[0].at, connected: true, line: '받는 중 · 14초 전 · d3m0a1b2', tone: 'ok' }, { id: 'd3m0e5f6', state: 'charging', state_at: phones[0].at - 30 * 60e3, connected: true, line: '충전 중 · 수집 안 함 · d3m0e5f6', tone: 'wait' }];
+      phones[0].home = { subject: { title: 'DEMO-001', note: '입원 3일째', goal: '수집 61 / 100시간', progress: 0.61, missing: false },
+        lines: [{ label: '워치', text: '받는 중 · 14초 전 · d3m0a1b2', tone: 'ok' }, { label: '워치', text: '충전 중 · 수집 안 함 · d3m0e5f6', tone: 'wait' }, { label: '폰 저장', text: '오늘 812,400행 · 남은 공간 약 40일', tone: 'ok' }, { label: '드라이브', text: '올림 · 6분 전 · 밀린 것 0 (gachondac…)', tone: 'ok' }],
+        remote_note: '원격 · 마지막 명령 09:12 시작 DEMO-001' };
+      phones[2].home = { subject: { title: '연구번호 없음', missing: true }, lines: [{ label: '워치', text: '충전 중 · 수집 안 함 · d3m0e5f6', tone: 'wait' }, { label: '폰 저장', text: '오늘 0행 · 남은 공간 약 41일', tone: 'ok' }, { label: '드라이브', text: '올림 · 9분 전 · 밀린 것 0 (gachondac…)', tone: 'ok' }], remote_note: '' };
+      return { phones, subjects };
+    },
+    // 예시 — 보낸 명령을 몇 초 뒤 «폰이 반영한» 것처럼
+    command: (pid, cmd) => { demoCmd.set(pid, { cmd, at: Date.now() }); },
+    ack: (pid) => { const c = demoCmd.get(pid); if (!c || Date.now() - c.at < 5000) return null; const k = c.cmd;
+      const p = phones.find((x) => x._dir === pid), sub = k.action === 'sync_now' ? (p ? p.subject_id : '') : k.action === 'end' ? '' : k.action === 'rename' ? k.rename_to : k.subject_id;
+      if (p) { p.subject_id = sub; p.at = Date.now(); if (p.home) p.home.subject = sub ? { title: sub, note: '입원 0일째', goal: '수집 0 / 100시간', progress: 0, missing: false } : { title: '연구번호 없음', missing: true }; }
+      return { format: 'avs-ack/1', cmd_id: k.cmd_id, seq: k.seq, action: k.action, applied_at: Date.now(), result: 'ok', reason: '', subject_id_now: sub, watch: { id: p ? p.watch_device_id || 'd3m0e5f6' : '', state: (p && p.watch_control && p.watch_control.state) || 'collecting', at: Date.now() } }; },
     dates: (s) => s.info.days.map((d) => ({ name: d.date, id: s.info.subject_id + '|' + d.date, s })),
     day: (d) => { if (!cacheDay.has(d.id)) { const man = mkManifest(d.s, d.name); cacheDay.set(d.id, { manifest: man, events: mkEvents(d.s, d.name, man) }); } return cacheDay.get(d.id); },
   };
