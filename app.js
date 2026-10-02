@@ -1166,7 +1166,7 @@ function drawOverview() {
     x.fillRect(x0 + 0.5, BAR_T + BAR_H - hh, x1 - x0 - 1, hh);
   });
   // 워치 상태 — 워치가 알린 수집 중 · 충전 중 · 대기 · 멈춤 (폰 2.1.9부터 events.csv에)
-  x.fillStyle = cssv('--mon-dim'); x.fillText(`워치 상태 — 수집 아닌 구간만${(sig.wstate || []).length ? '' : ' · 기록 없음(폰 2.1.9부터)'}`, 2, WS_Y - 4);
+  x.fillStyle = cssv('--mon-dim'); x.fillText(`워치 상태${(sig.wstate || []).length ? '' : ' · 기록 없음(폰 2.1.9부터)'}`, 2, WS_Y - 4);
   x.fillStyle = cssv('--mon-grid2'); x.fillRect(0, WS_Y, w, 10);
   (sig.wstate || []).forEach(([a, b, st]) => { if (st === 'collecting' || !(b > T0 && a < T1)) return; x.fillStyle = WS_COL[st]; x.fillRect(X(Math.max(a, T0)), WS_Y, Math.max(2, X(Math.min(b, T1)) - X(Math.max(a, T0))), 10); });
   // 끊긴 구간(워치-폰) — 넓으면 길이를 적음
