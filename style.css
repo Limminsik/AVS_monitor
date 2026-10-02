@@ -383,7 +383,8 @@ body.has-rail main, body.has-rail .foot { padding-right:140px; }
 .pl b { font-weight:600; color:var(--ink); }
 .pl span { color:var(--ink2); }
 .dot { width:9px; height:9px; border-radius:50%; margin-top:3px; background:#9AA4AE; display:inline-block; }
-.dot.ok { background:#1E9E50; } .dot.bad { background:#D93025; } .dot.warn { background:#E8890C; } .dot.wait { background:#7E57C2; }
+/* 폰 앱 첫 화면과 같은 색(Tone: OK · BAD · WARN · WAIT) */
+.dot.ok { background:#2E7D32; } .dot.bad { background:#C62828; } .dot.warn { background:#EF6C00; } .dot.wait { background:#78909C; }
 .pfoot { margin-top:10px; padding-top:8px; border-top:1px solid #E3E7EC; display:flex; flex-wrap:wrap; align-items:center; gap:6px 8px; }
 .pfoot .pf-logo { height:14px; width:auto; display:block; }
 .pfoot .pf-lic { font-size:9.5px; color:var(--ink3); }

@@ -270,7 +270,7 @@ function renderConn() {
     <tbody><tr class="st-${run ? 'ok' : 'off'} sel">
       <td><span class="pill ${run ? 'ok' : 'off'}">${run ? '수집 중' : '완료'}</span></td>
       <td class="subj">${esc(id)}</td>
-      <td data-tip="마지막 샘플 시각">${kstHM(lastSample)} <span class="muted">${ago(lastSample, now)}</span><div class="id">${esc(String(lastRow.watch || '').slice(0, 8) || '—')}</div>${ph && Array.isArray(ph.watches) && ph.watches.length ? '<div class="wst">' + ph.watches.filter((x) => x && x.id).map((x) => `<span class="pill ${WTONE[x.tone] || 'off'}" title="${esc(x.reason || '')}">${esc(String(x.line || x.state || '').replace(/\s*·\s*[0-9a-z]{8}$/i, ''))} · ${esc(String(x.id).slice(0, 8))}</span>`).join('') + '</div>' : ''}</td>
+      <td data-tip="마지막 샘플 시각">${kstHM(lastSample)} <span class="muted">${ago(lastSample, now)}</span><div class="id">${esc(String(lastRow.watch || '').slice(0, 8) || '—')}</div>${ph && Array.isArray(ph.watches) && ph.watches.length ? '<div class="wst">' + ph.watches.filter((x) => x && x.id).map((x) => `<span class="pill ${WTONE[x.tone] || 'off'}" title="${esc(x.reason || '')}">${esc(reage(String(x.line || x.state || '').replace(/\s*·\s*[0-9a-z]{8}$/i, ''), ph.at ? now - ph.at : 0, '워치'))} · ${esc(String(x.id).slice(0, 8))}</span>`).join('') + '</div>' : ''}</td>
       <td data-tip="폰이 manifest를 마지막으로 고친 시각">${kstHM(phoneAt)} <span class="muted">${ago(phoneAt, now)}</span><div class="id">${(() => { const h = state.connHead || ph; return h && h.phone_id ? esc(String(h.phone_id).slice(0, 8)) + (h.app_version ? ' · ' + esc(h.app_version) : '') : '—'; })()}</div></td>
       <td data-tip="드라이브에 manifest가 마지막으로 올라온 시각">${kstHM(driveAt)} <span class="muted">${ago(driveAt, now)}</span>${unsynced ? `<div class="id" style="color:var(--red)">대기 ${unsynced}파일</div>` : ''}</td>
       <td class="r">${fmtInt(total)}</td>
@@ -455,6 +455,17 @@ function cmdState(pid) {
 }
 
 // 폰 첫 화면 — 폰이 status.json 의 home 칸에 그대로 적어 보낸다(Z-3). 옛 앱이면 다른 칸으로 비슷하게
+// 폰이 글을 만든 뒤 흐른 시간만큼 «N초 전»·«N분» 같은 경과를 지금 기준으로 고친다(폰 화면은 1분마다 올라온다)
+const AGO_U = { 초: 1e3, 분: 6e4, 시간: 36e5, 일: 864e5 };
+const fmtAgo = (ms) => (ms < 6e4 ? `${Math.floor(ms / 1e3)}초` : ms < 36e5 ? `${Math.floor(ms / 6e4)}분` : ms < 864e5 ? `${Math.floor(ms / 36e5)}시간` : `${Math.floor(ms / 864e5)}일`);
+const fmtSince = (ms) => { const dd = Math.floor(ms / 864e5), hh = Math.floor((ms % 864e5) / 36e5), mm = Math.floor((ms % 36e5) / 6e4); return dd ? `${dd}일 ${hh}시간` : hh ? `${hh}시간 ${mm}분` : `${mm}분`; };
+function reage(text, dt, label) {
+  let t = String(text || '');
+  if (!(dt > 1000) || !/워치|드라이브/.test(label || '워치')) return t;
+  t = t.replace(/방금/g, `${fmtAgo(dt)} 전`).replace(/(\d+)(초|분|시간|일) 전/g, (m, n, u) => `${fmtAgo(+n * AGO_U[u] + dt)} 전`);
+  if (/워치/.test(label || '워치')) t = t.replace(/(?:(\d+)일 (\d+)시간|(\d+)시간 (\d+)분|(\d+)분)(?= ·|$)/g, (m, d1, h1, h2, m2, m3) => fmtSince((+d1 || 0) * 864e5 + (+h1 || +h2 || 0) * 36e5 + (+m2 || +m3 || 0) * 6e4 + dt));
+  return t;
+}
 function homeOf(p, now) {
   if (p.home && p.home.lines) return p.home;
   const w = p.last_sample_at && now - p.last_sample_at <= 10e3 ? ['ok', `받는 중 · ${ago(p.last_sample_at, now)}`] : p.last_sample_at ? ['bad', `안 옵니다 · ${ago(p.last_sample_at, now)}`] : ['bad', '아직 받은 것이 없습니다'];
@@ -500,7 +511,7 @@ function watchRows(p, w, ws) {
   return list.map((x) => {
     const st = WSTATE[x.state] || ['', x.state ? esc(x.state) : '—'];
     const tone = WTONE[x.tone] || st[0];
-    const text = x.line ? String(x.line).replace(/\s*·\s*[0-9a-f]{8}$/i, '') : st[1];
+    const text = x.line ? reage(String(x.line).replace(/\s*·\s*[0-9a-f]{8}$/i, ''), p.at ? Date.now() - p.at : 0, '워치') : st[1];
     return `<div><span class="k">워치</span> <span class="pill ${tone}" title="${esc(x.reason || '')}">${esc(text)}</span> <span class="id">${esc(String(x.id).slice(0, 8))}${x.connected === false ? ' · 끊김' : ''}${x.state_at ? ' · ' + kstHM(x.state_at) : ''}</span></div>`;
   }).join('');
 }
@@ -510,7 +521,8 @@ function drawerHtml(pid, n, now) {
   // 폰이 명령을 처리한 결과(ack)가 폰 화면 파일(status.json)보다 새것이면 연구번호는 결과를 따른다 — 폰 화면 파일은 1분 뒤에 따라온다
   const ackNewer = a.applied_at && a.applied_at > (p.at || 0) && a.result === 'ok' && a.action !== 'sync_now';
   if (ackNewer && h.subject && (h.subject.title !== (sub || '연구번호 없음'))) h.subject = sub ? { title: sub, note: '폰 화면 갱신 대기 · 명령은 반영됨', goal: '', missing: false } : { title: '연구번호 없음', missing: true, note: '폰 화면 갱신 대기 · 명령은 반영됨' };
-  const lines = (h.lines || []).map((l) => `<div class="pl"><i class="dot ${esc(l.tone)}"></i><b>${esc(l.label)}</b><span>${esc(l.text)}</span></div>`).join('');
+  const dtp = p.at ? now - p.at : 0;
+  const lines = (h.lines || []).map((l) => `<div class="pl"><i class="dot ${esc(l.tone)}"></i><b>${esc(l.label)}</b><span>${esc(reage(l.text, dtp, l.label))}</span></div>`).join('');
   return `<section class="drawer" data-pid="${esc(pid)}">
     <div class="dw-h"><b>MONITOR ${n}</b><span class="muted">${esc(pid.slice(0, 8))} · ${esc(p.app_version || '')}</span><button class="dw-x" title="닫기">✕</button></div>
     <div class="phone">
