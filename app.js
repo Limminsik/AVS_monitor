@@ -750,7 +750,7 @@ $('btnLogin').addEventListener('click', () => {
 // 보는 창이 걸친 시간 파일만 드라이브에서 읽고(앞뒤 파일은 미리 읽음), 최근 몇 개만 메모리에 둔다.
 
 // 워치 상태 띠 — events.csv 의 watch_control(«c112f8ad 충전 중»)로 구간을 만든다. 워치가 둘이면 수집 중 > 멈춤 > 충전 > 대기 순으로 한 줄
-const WS_COL = { collecting: '#1E9E50', stopped: '#D98A1C', charging: '#5B7A99', standby: '#5E6B7A', bad: '#C24A2A' };
+const WS_COL = { collecting: '#1E9E50', stopped: '#D98A1C', charging: '#5E6B7A', standby: '#5E6B7A', bad: '#C24A2A' };
 const WS_TXT = { collecting: '수집 중', stopped: '멈춤', charging: '충전 중', standby: '대기', bad: '앱 열기 필요' };
 const wsOf = (t) => (/수집/.test(t) ? 'collecting' : /충전/.test(t) ? 'charging' : /멈춤/.test(t) ? 'stopped' : /대기/.test(t) ? 'standby' : /앱 열기|권한/.test(t) ? 'bad' : null);
 function watchSpans() {
@@ -761,6 +761,9 @@ function watchSpans() {
     const st = pick(), ids = Object.entries(cur).map(([k, v]) => `${k} ${WS_TXT[v]}`).join(' · ');
     if (end > e.ms && st) { const last = out[out.length - 1]; if (last && last[2] === st && last[3] === ids && last[1] === e.ms) last[1] = end; else out.push([e.ms, end, st, ids]); } });
   return out;
+}
+function swapEvents() {
+  return (state.events || []).filter((e) => e.code === 'watch_switch').map((e) => ({ ...e, ms: Date.parse(String(e.kst).replace(' ', 'T') + '+09:00') })).filter((e) => !isNaN(e.ms));
 }
 function alarmSpans() {
   const evs = (state.events || []).map((e) => ({ code: e.code, ms: Date.parse(String(e.kst).replace(' ', 'T') + '+09:00') })).filter((e) => !isNaN(e.ms)).sort((p, q) => p.ms - q.ms);
@@ -907,7 +910,7 @@ function softRefresh() {
   sig.files = sig.comp.files.map((f) => ({ name: f.r.file, t0: f.t0, t1: f.t1, rows: f.n, fill: f.pct, status: f.r.status }));
   sig.T0 = sig.files[0].t0; sig.T1 = Math.max(...sig.files.map((f) => f.t1));
   sig.files.forEach((f) => { if (old.get(f.name) !== f.rows) { sig.cache.delete(f.name); sig.failed.delete(f.name); sig.sum.delete(f.name); } });
-  sig.alarms = alarmSpans(); sig.wstate = watchSpans();
+  sig.alarms = alarmSpans(); sig.wstate = watchSpans(); sig.swaps = swapEvents();
   renderSigKpi();
   seek(sig.view.t);
 }
@@ -922,8 +925,8 @@ function setTracker(tag, t) {
   sig.scanId++;
   if (!sameTag) { sig.sum.clear(); sig.cols = null; sig.chans = []; sig.header = null; sig.view.len = sig.rate >= 10 ? 30 : sig.rate >= 1 ? 1800 : 1800; }
   sig.failed.clear();
-  sig.alarms = alarmSpans(); sig.wstate = watchSpans();
-  sig.issues = (state.events || []).filter((e) => ['bad', 'warn'].includes(evClass(e.code)) && e.code !== 'watch_lost').map((e) => ({ ...e, ms: Date.parse(String(e.kst).replace(' ', 'T') + '+09:00') })).filter((e) => !isNaN(e.ms));
+  sig.alarms = alarmSpans(); sig.wstate = watchSpans(); sig.swaps = swapEvents();
+  sig.issues = (state.events || []).filter((e) => ['bad', 'warn'].includes(evClass(e.code)) && e.code !== 'watch_lost' && e.code !== 'watch_switch').map((e) => ({ ...e, ms: Date.parse(String(e.kst).replace(' ', 'T') + '+09:00') })).filter((e) => !isNaN(e.ms));
   renderSignalShell();
   seek(t ?? sig.T1 - sig.view.len * 1000);
 }
@@ -1026,7 +1029,7 @@ function renderSignalShell() {
       <div class="win-stat" id="sigStat"></div>
       <div id="sigChans"><div class="empty mon-empty">파일을 읽는 중…</div></div>
       <div class="readout" id="sigRead">그래프를 끌면 시간이 이어서 움직입니다 · 올리면 그 샘플 값과 아래 원본 줄이 표시됩니다 <span id="sigStatus"></span></div>
-      <div class="legend"><span><i class="sw" style="background:${chanColor('green')}"></i>측정 값</span><span><i class="sw" style="background:var(--mon-bad)"></i>센서 상태 −1</span><span><i class="sw" style="background:#FF4747"></i>누락 구간(25 Hz 1초 · 1 Hz 2.5초 넘게)</span><span><i class="sw" style="background:#E6EDF3;border-radius:50%"></i>다른 이슈(폰 로그)</span><span><i class="sw" style="background:#5B7A99"></i>워치 충전 중</span><span><i class="sw" style="background:#5E6B7A"></i>대기</span><span><i class="sw" style="background:#D98A1C"></i>멈춤</span><span><i class="sw" style="background:var(--mon-alarm)"></i>끊긴 구간(워치-폰)</span><span><i class="sw" style="background:transparent;border-color:var(--mon-win)"></i>지금 보는 창</span></div>
+      <div class="legend"><span><i class="sw" style="background:${chanColor('green')}"></i>측정 값</span><span><i class="sw" style="background:var(--mon-bad)"></i>센서 상태 −1</span><span><i class="sw" style="background:#FF4747"></i>누락 구간(25 Hz 1초 · 1 Hz 2.5초 넘게)</span><span><i class="sw" style="background:#E6EDF3;border-radius:50%"></i>다른 이슈(폰 로그)</span><span><i class="sw" style="background:#5E6B7A"></i>워치 대기(충전 포함)</span><span><i class="sw" style="background:#D98A1C"></i>멈춤</span><span><i class="sw" style="background:#E6EDF3;transform:rotate(45deg);border-radius:1px"></i>교체</span><span><i class="sw" style="background:var(--mon-alarm)"></i>끊긴 구간(워치-폰)</span><span><i class="sw" style="background:transparent;border-color:var(--mon-win)"></i>지금 보는 창</span></div>
     </div>
     <h3 class="sub-h raw-h">원본 값</h3>
     <div class="tw rawtw" id="rawBox"><table class="raw"><thead id="rawHead"></thead><tbody id="sigRows"></tbody></table></div>`;
@@ -1121,6 +1124,7 @@ function ovTip(t, y) {
   const parts = [`${kstDate(t).slice(5)} ${kstFull(t).slice(0, 8)}`];
   if (f) parts.push(`${f.name.replace(/\.ndjson$/, '')} · 완전성 ${f.fill === null ? '—' : f.fill.toFixed(1) + '%'}`);
   const wsp = (sig.wstate || []).find(([a, b]) => t >= a && t < b); if (wsp) parts.push(`워치 상태 ${wsp[3]}`);
+  (sig.swaps || []).filter((e) => Math.abs(e.ms - t) < (ovRange()[1] - ovRange()[0]) / 150).forEach((e) => parts.push(`${String(e.kst).slice(11, 19)} 교체 · ${e.text}`));
   if (al) parts.push(`끊긴 구간(워치-폰) ${kstFull(al[0]).slice(0, 8)}–${kstFull(al[1]).slice(0, 8)} · ${Math.round((al[1] - al[0]) / 1000)}초 — 누르면 그 시작으로`);
   const tol = (ovRange()[1] - ovRange()[0]) / 300, L = gapLanes(t - tol, t + tol);
   L.gaps.forEach(([a, b]) => parts.push(`누락 ${kstFull(a).slice(0, 8)}–${kstFull(b).slice(0, 8)} · ${((b - a) / 1000).toFixed(1)}초`));
@@ -1166,9 +1170,10 @@ function drawOverview() {
     x.fillRect(x0 + 0.5, BAR_T + BAR_H - hh, x1 - x0 - 1, hh);
   });
   // 워치 상태 — 워치가 알린 수집 중 · 충전 중 · 대기 · 멈춤 (폰 2.1.9부터 events.csv에)
-  x.fillStyle = cssv('--mon-dim'); x.fillText(`워치 상태${(sig.wstate || []).length ? '' : ' · 기록 없음(폰 2.1.9부터)'}`, 2, WS_Y - 4);
+  x.fillStyle = cssv('--mon-dim'); x.fillText(`워치 상태(대기 · 멈춤 · 교체)${(sig.wstate || []).length || (sig.swaps || []).length ? '' : ' · 기록 없음(폰 2.1.9부터)'}`, 2, WS_Y - 4);
   x.fillStyle = cssv('--mon-grid2'); x.fillRect(0, WS_Y, w, 10);
   (sig.wstate || []).forEach(([a, b, st]) => { if (st === 'collecting' || !(b > T0 && a < T1)) return; x.fillStyle = WS_COL[st]; x.fillRect(X(Math.max(a, T0)), WS_Y, Math.max(2, X(Math.min(b, T1)) - X(Math.max(a, T0))), 10); });
+  (sig.swaps || []).forEach((e) => { if (e.ms < T0 || e.ms > T1) return; const px = X(e.ms); x.fillStyle = '#E6EDF3'; x.strokeStyle = '#000'; x.lineWidth = 1; x.beginPath(); x.moveTo(px, WS_Y - 1); x.lineTo(px + 4, WS_Y + 5); x.lineTo(px, WS_Y + 11); x.lineTo(px - 4, WS_Y + 5); x.closePath(); x.fill(); x.stroke(); });
   // 끊긴 구간(워치-폰) — 넓으면 길이를 적음
   x.fillStyle = cssv('--mon-dim'); x.fillText('끊긴 구간(워치-폰)', 2, AL_Y - 4);
   x.fillStyle = cssv('--mon-grid2'); x.fillRect(0, AL_Y, w, 14);
@@ -1368,7 +1373,7 @@ const demo = (() => {
         ev.push({ kst: `${date} ${pad(h)}:${pad(m + 1 + Math.floor(rnd() * 3))}:38`, code: 'watch_back', text: '워치 상태 받는 중' }); }
       if (h === 3) ev.push({ kst: `${date} 03:12:10`, code: 'relay_restart', text: '중계 다시 켬 · 메모리 정리로 꺼짐' });
       if (h === 0) ev.push({ kst: `${date} 00:00:20`, code: 'watch_control', text: 'd3m0a1b2 수집 중' }, { kst: `${date} 00:00:20`, code: 'watch_control', text: 'd3m0e5f6 충전 중' });
-      if (h === 9) ev.push({ kst: `${date} 09:40:02`, code: 'watch_control', text: 'd3m0a1b2 충전 중' }, { kst: `${date} 09:41:30`, code: 'watch_control', text: 'd3m0e5f6 대기' }, { kst: `${date} 09:42:10`, code: 'watch_control', text: 'd3m0e5f6 수집 중' });
+      if (h === 9) ev.push({ kst: `${date} 09:40:02`, code: 'watch_control', text: 'd3m0a1b2 충전 중' }, { kst: `${date} 09:41:30`, code: 'watch_control', text: 'd3m0e5f6 대기' }, { kst: `${date} 09:41:55`, code: 'watch_switch', text: '워치 교대 d3m0a1b2 → d3m0e5f6' }, { kst: `${date} 09:42:10`, code: 'watch_control', text: 'd3m0e5f6 수집 중' });
       if (h === 13) ev.push({ kst: `${date} 13:10:00`, code: 'watch_control', text: 'd3m0e5f6 멈춤' }, { kst: `${date} 13:25:00`, code: 'watch_control', text: 'd3m0e5f6 수집 중' });
     });
     return ev.sort((a, b) => a.kst.localeCompare(b.kst));
