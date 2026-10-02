@@ -3,7 +3,7 @@
 
 const CFG = Object.assign({ clientId: '', rootFolderName: 'AVS_raw', refreshMinutes: 5, fastSeconds: 15, ackPollSeconds: 20, ackWarnMinutes: 2 }, window.AVS_CONFIG || {});
 /* 머리 막대에 작게 보이는 웹 판. 폰·워치 앱과 같은 번호로 맞춘다 — 나란히 놓고 같은 판인지 본다. */
-const VERSION = 'v2.1.7';
+const VERSION = 'v2.1.9';
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const DRIVE = 'https://www.googleapis.com/drive/v3/';
 const FOLDER = 'application/vnd.google-apps.folder';
@@ -270,7 +270,7 @@ function renderConn() {
     <tbody><tr class="st-${run ? 'ok' : 'off'} sel">
       <td><span class="pill ${run ? 'ok' : 'off'}">${run ? '수집 중' : '완료'}</span></td>
       <td class="subj">${esc(id)}</td>
-      <td data-tip="마지막 샘플 시각">${kstHM(lastSample)} <span class="muted">${ago(lastSample, now)}</span><div class="id">${esc(String(lastRow.watch || '').slice(0, 8) || '—')}</div></td>
+      <td data-tip="마지막 샘플 시각">${kstHM(lastSample)} <span class="muted">${ago(lastSample, now)}</span><div class="id">${esc(String(lastRow.watch || '').slice(0, 8) || '—')}</div>${ph && Array.isArray(ph.watches) && ph.watches.length ? '<div class="wst">' + ph.watches.filter((x) => x && x.id).map((x) => `<span class="pill ${WTONE[x.tone] || 'off'}" title="${esc(x.reason || '')}">${esc(String(x.line || x.state || '').replace(/\s*·\s*[0-9a-z]{8}$/i, ''))} · ${esc(String(x.id).slice(0, 8))}</span>`).join('') + '</div>' : ''}</td>
       <td data-tip="폰이 manifest를 마지막으로 고친 시각">${kstHM(phoneAt)} <span class="muted">${ago(phoneAt, now)}</span><div class="id">${(() => { const h = state.connHead || ph; return h && h.phone_id ? esc(String(h.phone_id).slice(0, 8)) + (h.app_version ? ' · ' + esc(h.app_version) : '') : '—'; })()}</div></td>
       <td data-tip="드라이브에 manifest가 마지막으로 올라온 시각">${kstHM(driveAt)} <span class="muted">${ago(driveAt, now)}</span>${unsynced ? `<div class="id" style="color:var(--red)">대기 ${unsynced}파일</div>` : ''}</td>
       <td class="r">${fmtInt(total)}</td>

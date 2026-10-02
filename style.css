@@ -408,3 +408,6 @@ body.has-rail main, body.has-rail .foot { padding-right:140px; }
 .diag-b { font-size:11.5px; background:var(--surface2); border:1px solid var(--line); border-radius:6px; padding:8px; margin-top:6px; max-height:320px; overflow:auto; }
 .loglist { width:100%; border-collapse:collapse; } .loglist td { padding:3px 4px; border-bottom:1px solid var(--line); vertical-align:top; } .loglist td:first-child { white-space:nowrap; color:var(--ink3); } .loglist td:nth-child(2) { white-space:nowrap; }
 .diag summary { font-size:12.5px; color:var(--ink2); font-weight:600; }
+
+.wst { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+.wst .pill { font-size:11px; }
